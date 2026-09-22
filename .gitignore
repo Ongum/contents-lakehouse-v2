@@ -1,0 +1,49 @@
+# Environment
+
+.env
+.env.*
+!.env.example
+
+# Python
+
+**pycache**/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# IDE
+
+.vscode/
+.idea/
+
+# Data
+
+data/
+*.parquet
+*.duckdb
+*.db
+
+# Logs
+
+logs/
+*.log
+
+# Spark
+
+spark-warehouse/
+metastore_db/
+derby.log
+
+# OS
+
+.DS_Store
+Thumbs.db
+
+# Secrets
+
+*.pem
+*.key
+credentials.json
+service-account*.json
