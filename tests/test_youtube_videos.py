@@ -33,7 +33,7 @@ class YouTubeVideosTest(unittest.TestCase):
     def test_fetch_video_details_batches_and_preserves_null_metrics(self, request):
         video_ids = [f"video-{index}" for index in range(51)]
 
-        def response(_api_key, resource, params):
+        def response(_api_key, resource, params, _bronze=None):
             self.assertEqual(resource, "videos")
             return {
                 "items": [

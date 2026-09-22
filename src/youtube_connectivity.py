@@ -3,12 +3,14 @@
 import json
 import os
 import sys
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
+from uuid import uuid4
 
 
 API_BASE_URL = "https://www.googleapis.com/youtube/v3"
@@ -20,6 +22,40 @@ SEED_HANDLES = (
 
 class ConnectivityError(Exception):
     """Raised when the connectivity check cannot complete."""
+
+
+class BronzeCapture:
+    """Collect raw API responses for one logical run without persisting them."""
+
+    def __init__(self, run_id: str | None = None) -> None:
+        self.run_id = run_id or str(uuid4())
+        self.records: list[dict[str, Any]] = []
+
+    def add(
+        self,
+        resource: str,
+        request_context: dict[str, str | int],
+        raw_payload: Any,
+    ) -> None:
+        safe_context = {
+            name: deepcopy(value)
+            for name, value in request_context.items()
+            if name.lower() not in {"key", "api_key", "youtube_api_key"}
+        }
+        self.records.append(
+            {
+                "run_id": self.run_id,
+                "source": "youtube",
+                "resource": resource,
+                "ingested_at": utc_now(),
+                "request_context": safe_context,
+                "raw_payload": deepcopy(raw_payload),
+            }
+        )
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def load_local_env(path: Path) -> None:
@@ -49,7 +85,10 @@ def get_api_key() -> str:
 
 
 def youtube_api_request(
-    api_key: str, resource: str, params: dict[str, str | int]
+    api_key: str,
+    resource: str,
+    params: dict[str, str | int],
+    bronze: BronzeCapture | None = None,
 ) -> dict[str, Any]:
     query = urlencode({**params, "key": api_key})
 
@@ -68,6 +107,8 @@ def youtube_api_request(
     except (json.JSONDecodeError, OSError) as error:
         raise ConnectivityError("YouTube API returned an unreadable response.") from error
 
+    if bronze is not None:
+        bronze.add(resource, params, payload)
     if not isinstance(payload, dict):
         raise ConnectivityError(
             f"YouTube API returned an invalid {resource} response."
@@ -106,7 +147,9 @@ def parse_utc_timestamp(value: Any, field: str, context: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def fetch_channel(api_key: str, handle: str) -> dict[str, str]:
+def fetch_channel(
+    api_key: str, handle: str, bronze: BronzeCapture | None = None
+) -> dict[str, str]:
     payload = youtube_api_request(
         api_key,
         "channels",
@@ -114,6 +157,7 @@ def fetch_channel(api_key: str, handle: str) -> dict[str, str]:
             "part": "snippet,statistics,contentDetails",
             "forHandle": handle,
         },
+        bronze,
     )
     items = payload.get("items", [])
     if not isinstance(items, list) or not items:
@@ -142,11 +186,15 @@ def fetch_channel(api_key: str, handle: str) -> dict[str, str]:
     }
 
 
-def fetch_seed_channels(api_key: str) -> list[dict[str, str]]:
-    return [fetch_channel(api_key, handle) for handle in SEED_HANDLES]
+def fetch_seed_channels(
+    api_key: str, bronze: BronzeCapture | None = None
+) -> list[dict[str, str]]:
+    return [fetch_channel(api_key, handle, bronze) for handle in SEED_HANDLES]
 
 
-def discover_video_ids(api_key: str, playlist_id: str) -> list[str]:
+def discover_video_ids(
+    api_key: str, playlist_id: str, bronze: BronzeCapture | None = None
+) -> list[str]:
     video_ids: list[str] = []
     page_token: str | None = None
     seen_page_tokens: set[str] = set()
@@ -159,7 +207,7 @@ def discover_video_ids(api_key: str, playlist_id: str) -> list[str]:
         }
         if page_token:
             params["pageToken"] = page_token
-        payload = youtube_api_request(api_key, "playlistItems", params)
+        payload = youtube_api_request(api_key, "playlistItems", params, bronze)
         items = payload.get("items")
         if not isinstance(items, list):
             raise ConnectivityError(
@@ -192,7 +240,10 @@ def discover_video_ids(api_key: str, playlist_id: str) -> list[str]:
 
 
 def fetch_video_details(
-    api_key: str, video_ids: list[str], observed_at: str
+    api_key: str,
+    video_ids: list[str],
+    observed_at: str,
+    bronze: BronzeCapture | None = None,
 ) -> list[dict[str, Any]]:
     videos: list[dict[str, Any]] = []
     for start in range(0, len(video_ids), 50):
@@ -201,6 +252,7 @@ def fetch_video_details(
             api_key,
             "videos",
             {"part": "snippet,statistics", "id": ",".join(batch)},
+            bronze,
         )
         items = payload.get("items")
         if not isinstance(items, list):
@@ -253,27 +305,35 @@ def fetch_video_details(
     return videos
 
 
-def collect_seed_videos(api_key: str) -> list[dict[str, Any]]:
-    observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def collect_seed_videos(
+    api_key: str, bronze: BronzeCapture | None = None
+) -> list[dict[str, Any]]:
+    observed_at = utc_now()
     videos: list[dict[str, Any]] = []
-    for channel in fetch_seed_channels(api_key):
-        video_ids = discover_video_ids(api_key, channel["uploads_playlist_id"])
-        videos.extend(fetch_video_details(api_key, video_ids, observed_at))
+    for channel in fetch_seed_channels(api_key, bronze):
+        video_ids = discover_video_ids(
+            api_key, channel["uploads_playlist_id"], bronze
+        )
+        videos.extend(fetch_video_details(api_key, video_ids, observed_at, bronze))
     return videos
 
 
 def main() -> int:
     try:
         api_key = get_api_key()
-        channels = fetch_seed_channels(api_key)
-        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        bronze = BronzeCapture()
+        channels = fetch_seed_channels(api_key, bronze)
+        observed_at = utc_now()
         videos_by_channel: list[tuple[dict[str, str], list[dict[str, Any]]]] = []
         for channel in channels:
             video_ids = discover_video_ids(
-                api_key, channel["uploads_playlist_id"]
+                api_key, channel["uploads_playlist_id"], bronze
             )
             videos_by_channel.append(
-                (channel, fetch_video_details(api_key, video_ids, observed_at))
+                (
+                    channel,
+                    fetch_video_details(api_key, video_ids, observed_at, bronze),
+                )
             )
     except ConnectivityError as error:
         print(f"Error: {error}", file=sys.stderr)
