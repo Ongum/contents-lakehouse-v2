@@ -12,6 +12,11 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 from uuid import uuid4
 
+if __package__:
+    from .bronze_storage import BronzeStorage, BronzeStorageError
+else:
+    from bronze_storage import BronzeStorage, BronzeStorageError
+
 
 API_BASE_URL = "https://www.googleapis.com/youtube/v3"
 SEED_HANDLES = (
@@ -27,9 +32,10 @@ class ConnectivityError(Exception):
 class BronzeCapture:
     """Collect raw API responses for one logical run without persisting them."""
 
-    def __init__(self, run_id: str | None = None) -> None:
+    def __init__(self, run_id: str | None = None, record_sink: Any = None) -> None:
         self.run_id = run_id or str(uuid4())
         self.records: list[dict[str, Any]] = []
+        self.record_sink = record_sink
 
     def add(
         self,
@@ -42,16 +48,17 @@ class BronzeCapture:
             for name, value in request_context.items()
             if name.lower() not in {"key", "api_key", "youtube_api_key"}
         }
-        self.records.append(
-            {
-                "run_id": self.run_id,
-                "source": "youtube",
-                "resource": resource,
-                "ingested_at": utc_now(),
-                "request_context": safe_context,
-                "raw_payload": deepcopy(raw_payload),
-            }
-        )
+        record = {
+            "run_id": self.run_id,
+            "source": "youtube",
+            "resource": resource,
+            "ingested_at": utc_now(),
+            "request_context": safe_context,
+            "raw_payload": deepcopy(raw_payload),
+        }
+        self.records.append(record)
+        if self.record_sink is not None:
+            self.record_sink(record)
 
 
 def utc_now() -> str:
@@ -321,7 +328,9 @@ def collect_seed_videos(
 def main() -> int:
     try:
         api_key = get_api_key()
-        bronze = BronzeCapture()
+        storage = BronzeStorage.from_environment()
+        storage.ensure_bucket()
+        bronze = BronzeCapture(record_sink=storage.write_record)
         channels = fetch_seed_channels(api_key, bronze)
         observed_at = utc_now()
         videos_by_channel: list[tuple[dict[str, str], list[dict[str, Any]]]] = []
@@ -335,7 +344,7 @@ def main() -> int:
                     fetch_video_details(api_key, video_ids, observed_at, bronze),
                 )
             )
-    except ConnectivityError as error:
+    except (ConnectivityError, BronzeStorageError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
