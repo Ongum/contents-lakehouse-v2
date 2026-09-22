@@ -9,8 +9,9 @@ class FakeResponse:
     def __init__(self, channel_id, title):
         self.body = (
             '{"items":[{"id":"%s","snippet":{"title":"%s"},'
-            '"statistics":{"subscriberCount":"100","videoCount":"20"}}]}'
-            % (channel_id, title)
+            '"statistics":{"subscriberCount":"100","videoCount":"20"},'
+            '"contentDetails":{"relatedPlaylists":{"uploads":"uploads-%s"}}}]}'
+            % (channel_id, title, channel_id)
         ).encode()
 
     def __enter__(self):
@@ -32,6 +33,10 @@ class YouTubeConnectivityTest(unittest.TestCase):
         result = fetch_seed_channels("test-key")
 
         self.assertEqual([channel["channel_id"] for channel in result], ["channel-1", "channel-2"])
+        self.assertEqual(
+            [channel["uploads_playlist_id"] for channel in result],
+            ["uploads-channel-1", "uploads-channel-2"],
+        )
         requested_urls = [call.args[0] for call in mocked_urlopen.call_args_list]
         self.assertIn("forHandle=%40RESCENE_official", requested_urls[0])
         self.assertIn(

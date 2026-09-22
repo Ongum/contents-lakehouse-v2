@@ -1,15 +1,17 @@
-"""Minimal YouTube Data API connectivity check for RESCENE seed channels."""
+"""Fetch current YouTube video data for the RESCENE seed channels."""
 
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
 
-API_URL = "https://www.googleapis.com/youtube/v3/channels"
+API_BASE_URL = "https://www.googleapis.com/youtube/v3"
 SEED_HANDLES = (
     "@RESCENE_official",
     "@helloiamwoninicetomeetyou",
@@ -46,17 +48,13 @@ def get_api_key() -> str:
     return api_key
 
 
-def fetch_channel(api_key: str, handle: str) -> dict[str, str]:
-    query = urlencode(
-        {
-            "part": "snippet,statistics",
-            "forHandle": handle,
-            "key": api_key,
-        }
-    )
+def youtube_api_request(
+    api_key: str, resource: str, params: dict[str, str | int]
+) -> dict[str, Any]:
+    query = urlencode({**params, "key": api_key})
 
     try:
-        with urlopen(f"{API_URL}?{query}", timeout=10) as response:
+        with urlopen(f"{API_BASE_URL}/{resource}?{query}", timeout=30) as response:
             payload = json.load(response)
     except HTTPError as error:
         raise ConnectivityError(
@@ -70,23 +68,77 @@ def fetch_channel(api_key: str, handle: str) -> dict[str, str]:
     except (json.JSONDecodeError, OSError) as error:
         raise ConnectivityError("YouTube API returned an unreadable response.") from error
 
+    if not isinstance(payload, dict):
+        raise ConnectivityError(
+            f"YouTube API returned an invalid {resource} response."
+        )
+    return payload
+
+
+def required_text(value: Any, field: str, context: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ConnectivityError(f"Missing required {field} in {context}.")
+    return value
+
+
+def parse_count(value: Any, field: str, video_id: str, required: bool) -> int | None:
+    if value is None and not required:
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as error:
+        raise ConnectivityError(
+            f"Invalid {field} for video {video_id}."
+        ) from error
+    if count < 0:
+        raise ConnectivityError(f"Invalid {field} for video {video_id}.")
+    return count
+
+
+def parse_utc_timestamp(value: Any, field: str, context: str) -> str:
+    text = required_text(value, field, context)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ConnectivityError(f"Invalid {field} in {context}.") from error
+    if parsed.tzinfo is None:
+        raise ConnectivityError(f"Invalid {field} in {context}: timezone is required.")
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def fetch_channel(api_key: str, handle: str) -> dict[str, str]:
+    payload = youtube_api_request(
+        api_key,
+        "channels",
+        {
+            "part": "snippet,statistics,contentDetails",
+            "forHandle": handle,
+        },
+    )
     items = payload.get("items", [])
-    if not items:
+    if not isinstance(items, list) or not items:
         raise ConnectivityError(f"YouTube API returned no channel for {handle}.")
 
     channel = items[0]
+    if not isinstance(channel, dict):
+        raise ConnectivityError(f"YouTube API returned an invalid channel for {handle}.")
     snippet = channel.get("snippet", {})
     statistics = channel.get("statistics", {})
+    content_details = channel.get("contentDetails", {})
+    uploads = content_details.get("relatedPlaylists", {}).get("uploads")
     subscriber_count = statistics.get("subscriberCount")
     if statistics.get("hiddenSubscriberCount"):
         subscriber_count = None
 
     return {
         "handle": handle,
-        "channel_id": channel.get("id", "unavailable"),
-        "title": snippet.get("title", "unavailable"),
+        "channel_id": required_text(channel.get("id"), "channel ID", handle),
+        "title": required_text(snippet.get("title"), "channel title", handle),
         "subscriber_count": subscriber_count or "unavailable",
         "video_count": statistics.get("videoCount", "unavailable"),
+        "uploads_playlist_id": required_text(
+            uploads, "uploads playlist ID", handle
+        ),
     }
 
 
@@ -94,21 +146,150 @@ def fetch_seed_channels(api_key: str) -> list[dict[str, str]]:
     return [fetch_channel(api_key, handle) for handle in SEED_HANDLES]
 
 
+def discover_video_ids(api_key: str, playlist_id: str) -> list[str]:
+    video_ids: list[str] = []
+    page_token: str | None = None
+    seen_page_tokens: set[str] = set()
+
+    while True:
+        params: dict[str, str | int] = {
+            "part": "contentDetails",
+            "playlistId": playlist_id,
+            "maxResults": 50,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        payload = youtube_api_request(api_key, "playlistItems", params)
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise ConnectivityError(
+                f"YouTube API returned invalid playlist items for {playlist_id}."
+            )
+        for item in items:
+            if not isinstance(item, dict):
+                raise ConnectivityError(
+                    f"YouTube API returned an invalid playlist item for {playlist_id}."
+                )
+            video_ids.append(
+                required_text(
+                    item.get("contentDetails", {}).get("videoId"),
+                    "video ID",
+                    f"playlist {playlist_id}",
+                )
+            )
+
+        next_page_token = payload.get("nextPageToken")
+        if next_page_token is None:
+            return video_ids
+        page_token = required_text(
+            next_page_token, "next page token", f"playlist {playlist_id}"
+        )
+        if page_token in seen_page_tokens:
+            raise ConnectivityError(
+                f"Repeated page token while reading playlist {playlist_id}."
+            )
+        seen_page_tokens.add(page_token)
+
+
+def fetch_video_details(
+    api_key: str, video_ids: list[str], observed_at: str
+) -> list[dict[str, Any]]:
+    videos: list[dict[str, Any]] = []
+    for start in range(0, len(video_ids), 50):
+        batch = video_ids[start : start + 50]
+        payload = youtube_api_request(
+            api_key,
+            "videos",
+            {"part": "snippet,statistics", "id": ",".join(batch)},
+        )
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise ConnectivityError("YouTube API returned invalid video items.")
+
+        returned_ids: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ConnectivityError("YouTube API returned an invalid video item.")
+            video_id = required_text(item.get("id"), "video ID", "video response")
+            snippet = item.get("snippet", {})
+            statistics = item.get("statistics", {})
+            if not isinstance(snippet, dict) or not isinstance(statistics, dict):
+                raise ConnectivityError(f"Invalid fields for video {video_id}.")
+            returned_ids.add(video_id)
+            videos.append(
+                {
+                    "video_id": video_id,
+                    "channel_id": required_text(
+                        snippet.get("channelId"), "channel ID", f"video {video_id}"
+                    ),
+                    "title": required_text(
+                        snippet.get("title"), "title", f"video {video_id}"
+                    ),
+                    "published_at": parse_utc_timestamp(
+                        snippet.get("publishedAt"),
+                        "published timestamp",
+                        f"video {video_id}",
+                    ),
+                    "view_count": parse_count(
+                        statistics.get("viewCount"), "view count", video_id, True
+                    ),
+                    "like_count": parse_count(
+                        statistics.get("likeCount"), "like count", video_id, False
+                    ),
+                    "comment_count": parse_count(
+                        statistics.get("commentCount"),
+                        "comment count",
+                        video_id,
+                        False,
+                    ),
+                    "observed_at": observed_at,
+                }
+            )
+
+        missing_ids = set(batch) - returned_ids
+        if missing_ids:
+            missing = ", ".join(sorted(missing_ids))
+            raise ConnectivityError(f"YouTube API returned no data for videos: {missing}.")
+    return videos
+
+
+def collect_seed_videos(api_key: str) -> list[dict[str, Any]]:
+    observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    videos: list[dict[str, Any]] = []
+    for channel in fetch_seed_channels(api_key):
+        video_ids = discover_video_ids(api_key, channel["uploads_playlist_id"])
+        videos.extend(fetch_video_details(api_key, video_ids, observed_at))
+    return videos
+
+
 def main() -> int:
     try:
-        channels = fetch_seed_channels(get_api_key())
+        api_key = get_api_key()
+        channels = fetch_seed_channels(api_key)
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        videos_by_channel: list[tuple[dict[str, str], list[dict[str, Any]]]] = []
+        for channel in channels:
+            video_ids = discover_video_ids(
+                api_key, channel["uploads_playlist_id"]
+            )
+            videos_by_channel.append(
+                (channel, fetch_video_details(api_key, video_ids, observed_at))
+            )
     except ConnectivityError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
-    for index, channel in enumerate(channels):
+    for index, (channel, videos) in enumerate(videos_by_channel):
         if index:
             print()
         print(f"Handle: {channel['handle']}")
         print(f"Channel ID: {channel['channel_id']}")
         print(f"Channel title: {channel['title']}")
-        print(f"Subscribers: {channel['subscriber_count']}")
-        print(f"Videos: {channel['video_count']}")
+        print(f"Videos collected: {len(videos)}")
+        if videos:
+            sample = videos[0]
+            print(f"Sample video ID: {sample['video_id']}")
+    print(f"Observed at: {observed_at}")
     return 0
 
 
