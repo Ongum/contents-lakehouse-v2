@@ -48,7 +48,12 @@ def build_spark_session() -> Any:
     catalog = _identifier(
         "ICEBERG_CATALOG", os.environ.get("ICEBERG_CATALOG", "lakehouse")
     )
+    gold_catalog = _identifier(
+        "GOLD_ICEBERG_CATALOG",
+        os.environ.get("GOLD_ICEBERG_CATALOG", "gold_lakehouse"),
+    )
     warehouse = _environment("ICEBERG_WAREHOUSE")
+    gold_warehouse = _environment("GOLD_ICEBERG_WAREHOUSE")
     endpoint = _environment("MINIO_ENDPOINT")
     access_key = _environment("MINIO_ACCESS_KEY")
     secret_key = _environment("MINIO_SECRET_KEY")
@@ -75,6 +80,21 @@ def build_spark_session() -> Any:
         .config(f"spark.sql.catalog.{catalog}.s3.access-key-id", access_key)
         .config(f"spark.sql.catalog.{catalog}.s3.secret-access-key", secret_key)
         .config(f"spark.sql.catalog.{catalog}.client.region", "us-east-1")
+        .config(
+            f"spark.sql.catalog.{gold_catalog}",
+            "org.apache.iceberg.spark.SparkCatalog",
+        )
+        .config(f"spark.sql.catalog.{gold_catalog}.type", "hadoop")
+        .config(f"spark.sql.catalog.{gold_catalog}.warehouse", gold_warehouse)
+        .config(
+            f"spark.sql.catalog.{gold_catalog}.io-impl",
+            "org.apache.iceberg.aws.s3.S3FileIO",
+        )
+        .config(f"spark.sql.catalog.{gold_catalog}.s3.endpoint", endpoint)
+        .config(f"spark.sql.catalog.{gold_catalog}.s3.path-style-access", "true")
+        .config(f"spark.sql.catalog.{gold_catalog}.s3.access-key-id", access_key)
+        .config(f"spark.sql.catalog.{gold_catalog}.s3.secret-access-key", secret_key)
+        .config(f"spark.sql.catalog.{gold_catalog}.client.region", "us-east-1")
         .config("spark.hadoop.fs.s3a.endpoint", endpoint)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")

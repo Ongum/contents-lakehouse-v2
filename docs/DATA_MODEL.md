@@ -116,3 +116,30 @@ artist 1 ──< youtube_channel 1 ──< youtube_video 1 ──< video_metrics
 
 Gold does not own new identities. It uses Silver primary and foreign keys so an
 analytic result remains traceable through Silver to its Bronze source.
+
+## Gold time-series tables
+
+### `video_metrics_hourly`
+
+One row per Silver observation, keyed by (`video_id`, `observed_at`). It keeps
+the cumulative `view_count`, `like_count`, and `comment_count` and adds
+`view_delta`, `like_delta`, and `comment_delta` relative to the previous
+available observation for that video. The first observation has null deltas.
+A delta is also null when either cumulative nullable metric is unavailable;
+missing likes or comments are never treated as zero. Negative deltas are valid.
+
+Despite the table name, `observed_at` is not rounded to an hourly boundary and
+no missing hourly observation is synthesized.
+
+### `video_growth_24h`
+
+One row per Silver observation, keyed by (`video_id`, `observed_at`). It keeps
+`view_count` and adds `view_delta_24h`, `like_delta_24h`,
+`comment_delta_24h`, and `view_growth_rate_24h`.
+
+For each row, the baseline is the latest real observation whose timestamp is
+at or before `observed_at - 24 hours`. This supports delayed or missing hourly
+collections without inventing observations. If no such baseline exists, all
+24-hour metrics are null. Nullable metric deltas remain null when either side
+is unavailable. View growth rate is `(current - baseline) / baseline`; it is
+null when the baseline view count is zero or unavailable.
