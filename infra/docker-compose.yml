@@ -17,5 +17,42 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  spark:
+    profiles: ["spark"]
+    build:
+      context: ..
+      dockerfile: infra/spark/Dockerfile
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:-contents-lakehouse}
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
+      AWS_REGION: us-east-1
+      ICEBERG_CATALOG: lakehouse
+      ICEBERG_WAREHOUSE: s3a://${MINIO_BUCKET:-contents-lakehouse}/silver
+      SILVER_NAMESPACE: ${SILVER_NAMESPACE:-silver}
+    volumes:
+      - ../:/opt/project:ro
+    working_dir: /opt/project
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command:
+      - --master
+      - local[2]
+      - --driver-memory
+      - 1g
+      - --conf
+      - spark.sql.shuffle.partitions=2
+      - --conf
+      - spark.default.parallelism=2
+      - ${SILVER_JOB_SCRIPT:-/opt/project/src/silver_iceberg_job.py}
+    mem_limit: 2g
+    cpus: 2.0
+    restart: "no"
+
 volumes:
   minio-data:
