@@ -41,6 +41,14 @@ The first analysis target is **RESCENE**, a K-pop artist group.
 
 Rather than collecting many artists from the beginning, the first version of the project focuses on building a complete end-to-end pipeline for a single artist.
 
+The MVP starts from two YouTube channels relevant to RESCENE analysis:
+
+* `@RESCENE_official`
+* `@helloiamwoninicetomeetyou`
+
+The second handle is treated as a related seed channel; the MVP does not assume
+that it is an official corporate or artist channel.
+
 The initial analysis will investigate:
 
 * How RESCENE's content ecosystem changes over time

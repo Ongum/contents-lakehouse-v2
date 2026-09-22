@@ -2,10 +2,12 @@
 
 ## Scope and principles
 
-The Local MVP supports one workload: collecting RESCENE YouTube data every
-hour and making it available for local analysis. The design favors reproducible
-batch runs and low idle memory use over distributed or continuously running
-infrastructure.
+The Local MVP supports one workload: collecting RESCENE-related YouTube data
+every hour and making it available for local analysis. Collection starts from
+`@RESCENE_official` and `@helloiamwoninicetomeetyou`. Both are relevant to the
+analysis; only the first is assumed to be an official RESCENE channel. The
+design favors reproducible batch runs and low idle memory use over distributed
+or continuously running infrastructure.
 
 Kafka and Airflow are not part of the MVP runtime. GCP is a future deployment
 target, not a dependency of the local pipeline.
@@ -51,7 +53,7 @@ needed for an hourly, single-artist workload.
 | --- | --- | --- |
 | Docker Compose | Define reproducible local services, networks, volumes, and configuration boundaries | Starts only the services needed for a run or analysis session |
 | MinIO | Durable object storage for immutable Bronze payloads and the files underlying local Iceberg tables | Persistent service with data on a Docker volume |
-| Collector | Fetch RESCENE channel, video, and metric data from the YouTube API and write Bronze records | One-shot process invoked hourly; exits after success or failure |
+| Collector | Fetch channel, video, and metric data for the configured RESCENE-related seed channels and write Bronze records | One-shot process invoked hourly; exits after success or failure |
 | Apache Spark | Parse, normalize, deduplicate, preserve lineage, and incrementally build Silver and Gold Iceberg tables | On-demand batch process; no idle Spark cluster |
 | Apache Iceberg | Provide transactional table metadata and table evolution for canonical Silver and derived Gold data | Table format, not a continuously running compute engine |
 | DuckDB | Query the local lakehouse for validation and analysis, especially Gold hourly and rolling 24-hour growth | Started only for a query or interactive session |
