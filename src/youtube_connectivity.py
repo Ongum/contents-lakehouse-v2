@@ -32,8 +32,14 @@ class ConnectivityError(Exception):
 class BronzeCapture:
     """Collect raw API responses for one logical run without persisting them."""
 
-    def __init__(self, run_id: str | None = None, record_sink: Any = None) -> None:
+    def __init__(
+        self,
+        run_id: str | None = None,
+        observed_at: str | None = None,
+        record_sink: Any = None,
+    ) -> None:
         self.run_id = run_id or str(uuid4())
+        self.observed_at = observed_at or utc_now()
         self.records: list[dict[str, Any]] = []
         self.record_sink = record_sink
 
@@ -52,6 +58,7 @@ class BronzeCapture:
             "run_id": self.run_id,
             "source": "youtube",
             "resource": resource,
+            "observed_at": self.observed_at,
             "ingested_at": utc_now(),
             "request_context": safe_context,
             "raw_payload": deepcopy(raw_payload),
@@ -315,7 +322,8 @@ def fetch_video_details(
 def collect_seed_videos(
     api_key: str, bronze: BronzeCapture | None = None
 ) -> list[dict[str, Any]]:
-    observed_at = utc_now()
+    bronze = bronze or BronzeCapture()
+    observed_at = bronze.observed_at
     videos: list[dict[str, Any]] = []
     for channel in fetch_seed_channels(api_key, bronze):
         video_ids = discover_video_ids(
@@ -332,7 +340,7 @@ def main() -> int:
         storage.ensure_bucket()
         bronze = BronzeCapture(record_sink=storage.write_record)
         channels = fetch_seed_channels(api_key, bronze)
-        observed_at = utc_now()
+        observed_at = bronze.observed_at
         videos_by_channel: list[tuple[dict[str, str], list[dict[str, Any]]]] = []
         for channel in channels:
             video_ids = discover_video_ids(

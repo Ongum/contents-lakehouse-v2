@@ -21,6 +21,11 @@ class FakeResponse:
         pass
 
 
+class FakeObject:
+    def __init__(self, object_name):
+        self.object_name = object_name
+
+
 class FakeMinioClient:
     def __init__(self):
         self.bucket_created = False
@@ -46,12 +51,20 @@ class FakeMinioClient:
         self.put_count += 1
         self.objects[(bucket, object_name)] = data.read(length)
 
+    def list_objects(self, bucket, prefix, recursive):
+        return [
+            FakeObject(object_name)
+            for stored_bucket, object_name in self.objects
+            if stored_bucket == bucket and object_name.startswith(prefix)
+        ]
+
 
 def bronze_record():
     return {
         "run_id": "run-123",
         "source": "youtube",
         "resource": "videos",
+        "observed_at": "2026-09-22T11:59:00Z",
         "ingested_at": "2026-09-22T12:00:00Z",
         "request_context": {"part": "snippet,statistics", "id": "video-1"},
         "raw_payload": {"items": [{"id": "video-1", "unchanged": [1, 2]}]},
@@ -81,6 +94,15 @@ class BronzeStorageTest(unittest.TestCase):
 
         self.assertEqual(first_name, second_name)
         self.assertEqual(self.client.put_count, 1)
+
+    def test_lists_persisted_bronze_records_with_source_reference(self):
+        record = bronze_record()
+        object_name = self.storage.write_record(record)
+
+        self.assertEqual(
+            self.storage.list_records(),
+            [(object_name, record)],
+        )
 
     def test_api_key_field_is_rejected(self):
         record = bronze_record()

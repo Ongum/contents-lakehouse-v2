@@ -15,7 +15,10 @@ def main() -> int:
     load_local_env(Path(__file__).resolve().parents[1] / ".env")
     storage = BronzeStorage.from_environment()
     storage.ensure_bucket()
-    capture = BronzeCapture(run_id=f"verification-{uuid4()}")
+    capture = BronzeCapture(
+        run_id=f"verification-{uuid4()}",
+        observed_at="2026-09-22T00:00:00Z",
+    )
     capture.add(
         "channels",
         {"part": "snippet", "verification": "true"},

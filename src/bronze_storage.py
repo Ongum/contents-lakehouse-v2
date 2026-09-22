@@ -13,6 +13,7 @@ BRONZE_FIELDS = {
     "run_id",
     "source",
     "resource",
+    "observed_at",
     "ingested_at",
     "request_context",
     "raw_payload",
@@ -185,3 +186,23 @@ class BronzeStorage:
         if not isinstance(record, dict):
             raise BronzeStorageError(f"Invalid Bronze object {object_name}.")
         return record
+
+    def list_records(
+        self, prefix: str = "bronze/youtube/"
+    ) -> list[tuple[str, dict[str, Any]]]:
+        try:
+            objects = self.client.list_objects(
+                self.bucket, prefix=prefix, recursive=True
+            )
+            references = sorted(
+                item.object_name
+                for item in objects
+                if item.object_name.endswith(".json")
+            )
+            return [(reference, self.read_record(reference)) for reference in references]
+        except BronzeStorageError:
+            raise
+        except Exception as error:
+            raise BronzeStorageError(
+                f"Unable to list Bronze objects under {prefix}."
+            ) from error

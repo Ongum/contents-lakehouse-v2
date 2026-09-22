@@ -27,7 +27,9 @@ class BronzeCaptureTest(unittest.TestCase):
         ],
     )
     def test_preserves_raw_responses_with_one_run_id_and_no_api_key(self, _urlopen):
-        bronze = BronzeCapture(run_id="run-123")
+        bronze = BronzeCapture(
+            run_id="run-123", observed_at="2026-09-22T01:00:00Z"
+        )
         resources = ("channels", "playlistItems", "videos")
 
         responses = [
@@ -47,6 +49,10 @@ class BronzeCaptureTest(unittest.TestCase):
         )
         self.assertEqual(
             [record["resource"] for record in bronze.records], list(resources)
+        )
+        self.assertEqual(
+            {record["observed_at"] for record in bronze.records},
+            {"2026-09-22T01:00:00Z"},
         )
         self.assertEqual(
             bronze.records[0]["raw_payload"],
