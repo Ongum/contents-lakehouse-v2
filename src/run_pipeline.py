@@ -25,9 +25,9 @@ class PipelineError(Exception):
     """Raised when one end-to-end pipeline stage cannot complete safely."""
 
 
-def main() -> int:
-    run_id = str(uuid4())
-    observed_at = utc_now()
+def main(run_id: str | None = None, observed_at: str | None = None) -> int:
+    run_id = run_id or str(uuid4())
+    observed_at = observed_at or utc_now()
     api_key = get_api_key()
     storage = BronzeStorage.from_environment()
     storage.ensure_bucket()

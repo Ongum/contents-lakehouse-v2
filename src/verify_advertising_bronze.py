@@ -1,47 +1,24 @@
 """Verify real Narangd HTTP collection, MinIO persistence, and change detection."""
 
 from pathlib import Path
-import re
 
 from advertising_bronze_storage import AdvertisingBronzeStorage
 from advertising_collection import (
     CollectionStatus,
-    SourceConfig,
     collect_source,
     content_hash,
 )
 from http_document_adapter import HttpDocumentAdapter
+from advertising_sources import NARANGD_SOURCE, narangd_identity_content
 from bronze_storage import BronzeStorageError
 from youtube_connectivity import load_local_env
-
-
-NARANGD_SOURCE = SourceConfig(
-    source_type="official_company_page",
-    source_name="Dong-A Otsuka Narangd Cider RESCENE sales update",
-    source_url=(
-        "https://www.donga-otsuka.co.kr/customer/board/"
-        "board_content.asp?idx=672&t_name=BOARD13"
-    ),
-    source_identifier="donga-otsuka:news:672",
-    published_at="2026-08-27",
-)
-
-
-def _narangd_identity_content(content: str) -> tuple[str, str]:
-    stable = re.sub(
-        r'(<th\s+class=["\']bdl["\']>\s*조회\s*</th>\s*<td>)\s*\d+\s*(</td>)',
-        r"\1{volatile-view-count}\2",
-        content,
-        flags=re.IGNORECASE,
-    )
-    return stable, "donga_otsuka_news_without_view_count_v1"
 
 
 def main() -> int:
     load_local_env(Path(__file__).resolve().parents[1] / ".env")
     storage = AdvertisingBronzeStorage.from_environment()
     storage.ensure_bucket()
-    adapter = HttpDocumentAdapter(identity_canonicalizer=_narangd_identity_content)
+    adapter = HttpDocumentAdapter(identity_canonicalizer=narangd_identity_content)
 
     first = collect_source(NARANGD_SOURCE, adapter, storage)
     if first.status not in {CollectionStatus.SUCCESS, CollectionStatus.UNCHANGED}:

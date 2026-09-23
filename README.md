@@ -175,3 +175,20 @@ Connect artist and content data with advertising and product-performance data.
 **Current milestone:**
 
 > Build a reproducible end-to-end YouTube data pipeline for RESCENE in the local Lakehouse environment.
+
+---
+
+## Local scheduled pipelines
+
+The production-style one-shot entrypoints are intended for later invocation by
+Windows Task Scheduler:
+
+* YouTube: `src/run_youtube_pipeline.py` — hourly
+* MediaWiki: `src/run_mediawiki_pipeline.py` — daily
+* Advertising: `src/run_advertising_pipeline.py` — daily
+
+Docker Desktop and the local MinIO service must be available when a task runs.
+Spark remains a short-lived Docker Compose job and exits after each pipeline.
+When Task Scheduler is configured, overlapping instances must be disabled by
+selecting **Do not start a new instance** when the same task is already running.
+Task Scheduler configuration and commands are intentionally deferred.
