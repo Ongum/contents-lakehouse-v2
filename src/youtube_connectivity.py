@@ -161,6 +161,24 @@ def parse_utc_timestamp(value: Any, field: str, context: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def optional_text(value: Any, field: str, context: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConnectivityError(f"Invalid {field} in {context}.")
+    return value
+
+
+def parse_caption(value: Any, video_id: str) -> bool | None:
+    if value is None:
+        return None
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ConnectivityError(f"Invalid caption flag for video {video_id}.")
+
+
 def fetch_channel(
     api_key: str, handle: str, bronze: BronzeCapture | None = None
 ) -> dict[str, str]:
@@ -265,7 +283,10 @@ def fetch_video_details(
         payload = youtube_api_request(
             api_key,
             "videos",
-            {"part": "snippet,statistics", "id": ",".join(batch)},
+            {
+                "part": "snippet,statistics,contentDetails",
+                "id": ",".join(batch),
+            },
             bronze,
         )
         items = payload.get("items")
@@ -279,8 +300,19 @@ def fetch_video_details(
             video_id = required_text(item.get("id"), "video ID", "video response")
             snippet = item.get("snippet", {})
             statistics = item.get("statistics", {})
-            if not isinstance(snippet, dict) or not isinstance(statistics, dict):
+            content_details = item.get("contentDetails", {})
+            if (
+                not isinstance(snippet, dict)
+                or not isinstance(statistics, dict)
+                or not isinstance(content_details, dict)
+            ):
                 raise ConnectivityError(f"Invalid fields for video {video_id}.")
+            tags = snippet.get("tags")
+            if tags is not None and (
+                not isinstance(tags, list)
+                or any(not isinstance(tag, str) for tag in tags)
+            ):
+                raise ConnectivityError(f"Invalid tags for video {video_id}.")
             returned_ids.add(video_id)
             videos.append(
                 {
@@ -290,6 +322,35 @@ def fetch_video_details(
                     ),
                     "title": required_text(
                         snippet.get("title"), "title", f"video {video_id}"
+                    ),
+                    "description": optional_text(
+                        snippet.get("description"),
+                        "description",
+                        f"video {video_id}",
+                    ),
+                    "channel_title": optional_text(
+                        snippet.get("channelTitle"),
+                        "channel title",
+                        f"video {video_id}",
+                    ),
+                    "tags": tags,
+                    "category_id": optional_text(
+                        snippet.get("categoryId"),
+                        "category ID",
+                        f"video {video_id}",
+                    ),
+                    "duration": optional_text(
+                        content_details.get("duration"),
+                        "duration",
+                        f"video {video_id}",
+                    ),
+                    "caption": parse_caption(
+                        content_details.get("caption"), video_id
+                    ),
+                    "definition": optional_text(
+                        content_details.get("definition"),
+                        "definition",
+                        f"video {video_id}",
                     ),
                     "published_at": parse_utc_timestamp(
                         snippet.get("publishedAt"),

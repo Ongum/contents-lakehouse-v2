@@ -43,7 +43,28 @@ class YouTubeVideosTest(unittest.TestCase):
                             "channelId": "channel-1",
                             "title": f"Title {video_id}",
                             "publishedAt": "2026-01-02T03:04:05Z",
+                            **(
+                                {}
+                                if video_id == "video-0"
+                                else {
+                                    "description": "Description",
+                                    "channelTitle": "Channel One",
+                                    "tags": ["music", "rescene"],
+                                    "categoryId": "10",
+                                }
+                            ),
                         },
+                        **(
+                            {}
+                            if video_id == "video-0"
+                            else {
+                                "contentDetails": {
+                                    "duration": "PT3M12S",
+                                    "caption": "true",
+                                    "definition": "hd",
+                                }
+                            }
+                        ),
                         "statistics": {
                             "viewCount": "10",
                             **(
@@ -64,12 +85,27 @@ class YouTubeVideosTest(unittest.TestCase):
 
         self.assertEqual(len(result), 51)
         self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            request.call_args_list[0].args[2]["part"],
+            "snippet,statistics,contentDetails",
+        )
         self.assertEqual(result[0]["view_count"], 10)
         self.assertIsNone(result[0]["like_count"])
         self.assertIsNone(result[0]["comment_count"])
         self.assertEqual(result[1]["like_count"], 7)
         self.assertEqual(result[1]["comment_count"], 3)
         self.assertEqual(result[0]["observed_at"], "2026-09-22T01:00:00Z")
+        self.assertIsNone(result[0]["tags"])
+        self.assertIsNone(result[0]["duration"])
+        self.assertIsNone(result[0]["caption"])
+        self.assertIsNone(result[0]["definition"])
+        self.assertEqual(result[1]["description"], "Description")
+        self.assertEqual(result[1]["channel_title"], "Channel One")
+        self.assertEqual(result[1]["tags"], ["music", "rescene"])
+        self.assertEqual(result[1]["category_id"], "10")
+        self.assertEqual(result[1]["duration"], "PT3M12S")
+        self.assertIs(result[1]["caption"], True)
+        self.assertEqual(result[1]["definition"], "hd")
 
     @patch("src.youtube_connectivity.youtube_api_request")
     def test_missing_video_response_fails_instead_of_dropping_record(self, request):

@@ -48,10 +48,21 @@ One row per collected YouTube video.
 | `video_id` | string | Primary key; YouTube video ID |
 | `channel_id` | string | Foreign key to `youtube_channel.channel_id` |
 | `title` | string | Latest normalized video title |
+| `description` | string, nullable | YouTube video description |
+| `channel_title` | string, nullable | Channel title returned with the video |
+| `tags` | array<string>, nullable | YouTube tags when supplied |
+| `category_id` | string, nullable | YouTube category identifier |
+| `duration` | string, nullable | Original ISO 8601 duration from YouTube |
+| `caption` | boolean, nullable | Whether YouTube reports captions for the video |
+| `definition` | string, nullable | YouTube definition value, such as `hd` or `sd` |
 | `published_at` | timestamp | YouTube publication time |
 | `source_updated_at` | timestamp, nullable | Update time supplied by YouTube, when available |
 
 Video metadata is kept once here. Changing metrics do not belong in this table.
+`category_id` is YouTube's source taxonomy and is not an analytical
+`content_type`. A future `content_type` could classify videos as music videos,
+Shorts, dance practices, behind-the-scenes content, and similar formats, but
+that classification is not part of this milestone.
 
 ### `video_metrics_snapshot`
 

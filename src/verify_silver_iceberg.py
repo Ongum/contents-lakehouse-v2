@@ -47,6 +47,15 @@ def main() -> int:
                             "channelId": "verification-channel",
                             "title": "Verification Video",
                             "publishedAt": "2026-09-21T12:00:00Z",
+                            "description": "Verification description",
+                            "channelTitle": "RESCENE",
+                            "tags": ["verification", "music"],
+                            "categoryId": "10",
+                        },
+                        "contentDetails": {
+                            "duration": "PT2M30S",
+                            "caption": "true",
+                            "definition": "hd",
                         },
                         "statistics": {"viewCount": "10"},
                     }
@@ -62,10 +71,18 @@ def main() -> int:
 
     spark = build_spark_session()
     try:
-        persist_silver_result(spark, result)
-        persist_silver_result(spark, result)
         catalog = os.environ.get("ICEBERG_CATALOG", "lakehouse")
         namespace = os.environ.get("SILVER_NAMESPACE", "silver")
+        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
+        spark.sql(
+            f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.youtube_video ("
+            "video_id STRING NOT NULL, channel_id STRING NOT NULL, "
+            "title STRING NOT NULL, published_at TIMESTAMP NOT NULL, "
+            "source_updated_at TIMESTAMP) USING iceberg "
+            "TBLPROPERTIES ('format-version' = '2')"
+        )
+        persist_silver_result(spark, result)
+        persist_silver_result(spark, result)
         expected = {
             "youtube_channel": 1,
             "youtube_video": 1,
@@ -90,6 +107,13 @@ def main() -> int:
             or video.video_id != "verification-video"
             or video.channel_id != "verification-channel"
             or video.title != "Verification Video"
+            or video.description != "Verification description"
+            or video.channel_title != "RESCENE"
+            or video.tags != ["verification", "music"]
+            or video.category_id != "10"
+            or video.duration != "PT2M30S"
+            or video.caption is not True
+            or video.definition != "hd"
             or video.published_at.isoformat() != "2026-09-21T12:00:00"
             or metrics.video_id != "verification-video"
             or metrics.view_count != 10

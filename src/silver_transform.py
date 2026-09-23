@@ -49,6 +49,34 @@ def _count(value: Any, field_name: str, required: bool) -> int | None:
     return result
 
 
+def _optional_text(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RecordValidationError(f"Invalid {field_name}.")
+    return value
+
+
+def _optional_tags(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(tag, str) for tag in value):
+        raise RecordValidationError("Invalid tags.")
+    return value
+
+
+def _optional_caption(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    if isinstance(value, bool):
+        return value
+    raise RecordValidationError("Invalid caption flag.")
+
+
 def _invalid(
     source_reference: str,
     run_id: str | None,
@@ -271,16 +299,36 @@ def transform_bronze_objects(
                 video_id = _required_text(item.get("id"), "video_id")
                 snippet = item.get("snippet")
                 statistics = item.get("statistics")
+                content_details = item.get("contentDetails", {})
                 if not isinstance(snippet, dict):
                     raise RecordValidationError("Missing video snippet.")
                 if not isinstance(statistics, dict):
                     raise RecordValidationError("Missing video statistics.")
+                if not isinstance(content_details, dict):
+                    raise RecordValidationError("Invalid video contentDetails.")
                 video = {
                     "video_id": video_id,
                     "channel_id": _required_text(
                         snippet.get("channelId"), "channel_id"
                     ),
                     "title": _required_text(snippet.get("title"), "title"),
+                    "description": _optional_text(
+                        snippet.get("description"), "description"
+                    ),
+                    "channel_title": _optional_text(
+                        snippet.get("channelTitle"), "channel_title"
+                    ),
+                    "tags": _optional_tags(snippet.get("tags")),
+                    "category_id": _optional_text(
+                        snippet.get("categoryId"), "category_id"
+                    ),
+                    "duration": _optional_text(
+                        content_details.get("duration"), "duration"
+                    ),
+                    "caption": _optional_caption(content_details.get("caption")),
+                    "definition": _optional_text(
+                        content_details.get("definition"), "definition"
+                    ),
                     "published_at": _utc_timestamp(
                         snippet.get("publishedAt"), "published_at"
                     ),

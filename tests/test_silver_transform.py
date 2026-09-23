@@ -46,6 +46,15 @@ class SilverTransformTest(unittest.TestCase):
                                 "channelId": "channel-1",
                                 "title": "Video One",
                                 "publishedAt": "2026-09-20T02:00:00Z",
+                                "description": "A real description",
+                                "channelTitle": "RESCENE",
+                                "tags": ["RESCENE", "music"],
+                                "categoryId": "10",
+                            },
+                            "contentDetails": {
+                                "duration": "PT3M1S",
+                                "caption": "false",
+                                "definition": "hd",
                             },
                             "statistics": {"viewCount": "100"},
                         }
@@ -72,6 +81,13 @@ class SilverTransformTest(unittest.TestCase):
         )
         self.assertEqual(result.youtube_videos[0]["video_id"], "video-1")
         self.assertEqual(result.youtube_videos[0]["published_at"], "2026-09-20T02:00:00Z")
+        self.assertEqual(result.youtube_videos[0]["description"], "A real description")
+        self.assertEqual(result.youtube_videos[0]["channel_title"], "RESCENE")
+        self.assertEqual(result.youtube_videos[0]["tags"], ["RESCENE", "music"])
+        self.assertEqual(result.youtube_videos[0]["category_id"], "10")
+        self.assertEqual(result.youtube_videos[0]["duration"], "PT3M1S")
+        self.assertIs(result.youtube_videos[0]["caption"], False)
+        self.assertEqual(result.youtube_videos[0]["definition"], "hd")
         self.assertEqual(
             result.video_metrics_snapshots,
             [
@@ -89,6 +105,41 @@ class SilverTransformTest(unittest.TestCase):
             "bronze/videos.json",
             {entry["source_reference"] for entry in result.lineage},
         )
+
+    def test_missing_optional_video_metadata_remains_null(self):
+        payload = {
+            "items": [
+                {
+                    "id": "video-minimal",
+                    "snippet": {
+                        "channelId": "channel-1",
+                        "title": "Minimal",
+                        "publishedAt": "2026-09-20T02:00:00Z",
+                    },
+                    "statistics": {"viewCount": "5"},
+                }
+            ]
+        }
+
+        result = transform_bronze_objects(
+            [envelope("videos", payload, "bronze/minimal.json")],
+            RESCENE_CHANNELS,
+        )
+
+        video = result.youtube_videos[0]
+        for field in (
+            "description",
+            "channel_title",
+            "tags",
+            "category_id",
+            "duration",
+            "caption",
+            "definition",
+        ):
+            self.assertIsNone(video[field])
+        self.assertEqual(result.video_metrics_snapshots[0]["view_count"], 5)
+        self.assertIsNone(result.video_metrics_snapshots[0]["like_count"])
+        self.assertIsNone(result.video_metrics_snapshots[0]["comment_count"])
 
     def test_marks_only_configured_official_channel_as_official(self):
         related = envelope(

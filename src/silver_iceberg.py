@@ -136,6 +136,13 @@ def create_silver_tables(spark: Any) -> None:
             video_id STRING NOT NULL,
             channel_id STRING NOT NULL,
             title STRING NOT NULL,
+            description STRING,
+            channel_title STRING,
+            tags ARRAY<STRING>,
+            category_id STRING,
+            duration STRING,
+            caption BOOLEAN,
+            definition STRING,
             published_at TIMESTAMP NOT NULL,
             source_updated_at TIMESTAMP
         """,
@@ -148,11 +155,30 @@ def create_silver_tables(spark: Any) -> None:
         """,
     }
     for table, columns in definitions.items():
+        table_name = f"{catalog}.{namespace}.{table}"
         spark.sql(
-            f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table} "
+            f"CREATE TABLE IF NOT EXISTS {table_name} "
             f"({columns}) USING iceberg "
             "TBLPROPERTIES ('format-version' = '2')"
         )
+    video_table = f"{catalog}.{namespace}.youtube_video"
+    existing_columns = set(spark.table(video_table).columns)
+    additions = {
+        "description": "STRING",
+        "channel_title": "STRING",
+        "tags": "ARRAY<STRING>",
+        "category_id": "STRING",
+        "duration": "STRING",
+        "caption": "BOOLEAN",
+        "definition": "STRING",
+    }
+    missing = [
+        f"{name} {data_type}"
+        for name, data_type in additions.items()
+        if name not in existing_columns
+    ]
+    if missing:
+        spark.sql(f"ALTER TABLE {video_table} ADD COLUMNS ({', '.join(missing)})")
 
 
 def _merge(spark: Any, table: str, rows: list[dict[str, Any]], schema: Any) -> None:
@@ -169,11 +195,17 @@ def _merge(spark: Any, table: str, rows: list[dict[str, Any]], schema: Any) -> N
             "AND target.observed_at = source.observed_at"
         ),
     }
+    columns = [field.name for field in schema.fields]
+    assignments = ", ".join(
+        f"target.{column} = source.{column}" for column in columns
+    )
+    insert_columns = ", ".join(columns)
+    insert_values = ", ".join(f"source.{column}" for column in columns)
     spark.sql(
         f"MERGE INTO {catalog}.{namespace}.{table} target "
         f"USING {view} source ON {keys[table]} "
-        "WHEN MATCHED THEN UPDATE SET * "
-        "WHEN NOT MATCHED THEN INSERT *"
+        f"WHEN MATCHED THEN UPDATE SET {assignments} "
+        f"WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})"
     )
     spark.catalog.dropTempView(view)
 
@@ -182,6 +214,7 @@ def persist_silver_result(spark: Any, result: Any) -> None:
     """Upsert one canonical SilverResult into the three MVP Iceberg tables."""
     from pyspark.sql.types import (
         BooleanType,
+        ArrayType,
         LongType,
         StringType,
         StructField,
@@ -203,6 +236,13 @@ def persist_silver_result(spark: Any, result: Any) -> None:
             StructField("video_id", StringType(), False),
             StructField("channel_id", StringType(), False),
             StructField("title", StringType(), False),
+            StructField("description", StringType(), True),
+            StructField("channel_title", StringType(), True),
+            StructField("tags", ArrayType(StringType(), False), True),
+            StructField("category_id", StringType(), True),
+            StructField("duration", StringType(), True),
+            StructField("caption", BooleanType(), True),
+            StructField("definition", StringType(), True),
             StructField("published_at", TimestampType(), False),
             StructField("source_updated_at", TimestampType(), True),
         ]
