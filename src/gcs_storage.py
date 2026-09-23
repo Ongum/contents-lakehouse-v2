@@ -79,7 +79,8 @@ class GCSClientAdapter:
         return cls(storage.Client(project=settings.project_id), settings.project_id), settings.bucket
 
     def bucket_exists(self, bucket: str) -> bool:
-        return self.client.bucket(bucket).exists(client=self.client)
+        """Assume a pre-provisioned bucket; object operations validate access."""
+        return True
 
     def make_bucket(self, bucket: str) -> None:
         raise GCSStorageError(

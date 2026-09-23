@@ -2,7 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -103,14 +103,25 @@ class GCSStorageTest(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True):
             self.assertEqual(GCSSettings.from_environment().bucket, "legacy")
 
-    def test_missing_gcs_bucket_is_not_created(self) -> None:
-        client = _Client(bucket_accessible=False)
-        storage = BronzeStorage(GCSClientAdapter(client, "project"), "missing")
+    def test_initialization_does_not_access_bucket_metadata_or_create_bucket(self) -> None:
+        for storage_class in (BronzeStorage, MediaWikiBronzeStorage):
+            with self.subTest(storage_class=storage_class.__name__):
+                client = Mock()
+                storage = storage_class(GCSClientAdapter(client, "project"), "bucket")
 
-        with self.assertRaisesRegex(BronzeStorageError, "pre-provisioned bucket"):
-            storage.ensure_bucket()
+                storage.ensure_bucket()
 
-        self.assertEqual(client.create_bucket_calls, 0)
+                self.assertEqual(client.mock_calls, [])
+
+    def test_object_access_errors_are_not_hidden(self) -> None:
+        client = Mock()
+        client.bucket.return_value.blob.return_value.download_as_bytes.side_effect = (
+            PermissionError("object access denied")
+        )
+        adapter = GCSClientAdapter(client, "project")
+
+        with self.assertRaisesRegex(PermissionError, "object access denied"):
+            adapter.get_object("bucket", "object")
 
     def test_adapter_supports_existing_bronze_storage_contract(self) -> None:
         client = _Client()
@@ -127,6 +138,7 @@ class GCSStorageTest(unittest.TestCase):
         object_name = storage.write_record(record)
         self.assertEqual(storage.read_record(object_name), record)
         self.assertEqual(storage.write_record(record), object_name)
+        self.assertEqual(client.preconditions, [0])
 
     def test_atomic_create_maps_gcs_precondition(self) -> None:
         client = _Client()
