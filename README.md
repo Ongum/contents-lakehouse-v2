@@ -180,15 +180,20 @@ Connect artist and content data with advertising and product-performance data.
 
 ## Local scheduled pipelines
 
-The production-style one-shot entrypoints are intended for later invocation by
-Windows Task Scheduler:
+The production-style one-shot entrypoints are intended for invocation through
+their Windows CMD wrappers by Windows Task Scheduler:
 
-* YouTube: `src/run_youtube_pipeline.py` — hourly
-* MediaWiki: `src/run_mediawiki_pipeline.py` — daily
-* Advertising: `src/run_advertising_pipeline.py` — daily
+* YouTube: `scripts/run_youtube_pipeline.cmd` — hourly at minute `05`
+* MediaWiki: `scripts/run_mediawiki_pipeline.cmd` — daily at `06:10`
+* Advertising: `scripts/run_advertising_pipeline.cmd` — daily at `06:30`
 
-Docker Desktop and the local MinIO service must be available when a task runs.
-Spark remains a short-lived Docker Compose job and exits after each pipeline.
-When Task Scheduler is configured, overlapping instances must be disabled by
-selecting **Do not start a new instance** when the same task is already running.
-Task Scheduler configuration and commands are intentionally deferred.
+Docker Desktop must already be running when a task starts. Whether to select
+**Run whether user is logged on or not** depends on whether the local Docker
+Desktop installation is available in that session. Each task's action should
+execute the corresponding `.cmd` wrapper. Logs are appended under `logs/`.
+
+For all three tasks, set **If the task is already running** to **Do not start a
+new instance**. The wrappers do not start Docker Desktop, retry failures, or
+implement their own locking. Spark remains a short-lived Docker Compose job and
+exits after each pipeline. Task Scheduler itself is not configured by this
+project.
