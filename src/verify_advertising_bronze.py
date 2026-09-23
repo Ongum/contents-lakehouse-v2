@@ -3,14 +3,14 @@
 from pathlib import Path
 import re
 
-from advertising_bronze import (
-    AdvertisingBronzeStorage,
+from advertising_bronze_storage import AdvertisingBronzeStorage
+from advertising_collection import (
     CollectionStatus,
-    HttpDocumentAdapter,
     SourceConfig,
     collect_source,
     content_hash,
 )
+from http_document_adapter import HttpDocumentAdapter
 from bronze_storage import BronzeStorageError
 from youtube_connectivity import load_local_env
 

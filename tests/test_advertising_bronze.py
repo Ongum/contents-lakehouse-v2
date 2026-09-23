@@ -5,11 +5,10 @@ import unittest
 from io import BytesIO
 from urllib.error import HTTPError, URLError
 
-from src.advertising_bronze import (
-    AdvertisingBronzeStorage,
+from src.advertising_bronze_storage import AdvertisingBronzeStorage
+from src.advertising_collection import (
     CollectionStatus,
     FetchedDocument,
-    HttpDocumentAdapter,
     SourceConfig,
     build_bronze_record,
     canonicalize_content,
@@ -17,8 +16,9 @@ from src.advertising_bronze import (
     content_hash,
     is_sensitive_name,
     sanitize_metadata,
-    _safe_url,
+    safe_url,
 )
+from src.http_document_adapter import HttpDocumentAdapter
 
 
 class MissingObjectError(Exception):
@@ -266,7 +266,7 @@ class AdvertisingBronzeTest(unittest.TestCase):
         self.assertEqual(sanitize_metadata(metadata), metadata)
 
     def test_safe_url_redacts_credential_query_variants(self):
-        safe = _safe_url(
+        safe = safe_url(
             "https://example.test/data?access-token=secret&apiKey=hidden&category=drink"
         )
 
