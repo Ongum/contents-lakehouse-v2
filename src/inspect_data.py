@@ -8,8 +8,19 @@ from silver_iceberg import SilverPersistenceError, build_spark_session
 
 
 def _short(value: object, limit: int = 72) -> str:
+    if value is None:
+        return "-"
     text = str(value).replace("\r", " ").replace("\n", " ")
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
+def _format_duration_seconds(value: float | None) -> str:
+    if value is None:
+        return "unavailable"
+    seconds = int(round(value))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:d}:{minutes:02d}:{seconds:02d}"
 
 
 def main() -> int:
@@ -81,13 +92,102 @@ def main() -> int:
             snapshots.withColumn("rank", functions.row_number().over(latest_window))
             .where(functions.col("rank") == 1)
             .drop("rank")
-            .join(videos.select("video_id", "title"), "video_id", "left")
         )
+        video_current = videos.join(current, "video_id", "left")
         print("  Top videos by current views:")
-        for row in current.orderBy(functions.col("view_count").desc()).limit(5).collect():
+        for row in (
+            video_current.orderBy(functions.col("view_count").desc())
+            .limit(5)
+            .collect()
+        ):
             print(
                 f"    {row.view_count:,} | {_short(row.title)} | "
                 f"observed {row.observed_at}"
+            )
+
+        print("Video sample")
+        print("  Categories:")
+        for row in videos.groupBy("category_id").count().orderBy(
+            functions.col("count").desc(), functions.col("category_id")
+        ).collect():
+            print(f"    {_short(row.category_id)}: {row['count']:,} video(s)")
+
+        duration_seconds = (
+            functions.coalesce(
+                functions.regexp_extract("duration", r"P(\d+)D", 1).cast("double"),
+                functions.lit(0.0),
+            )
+            * 86400
+            + functions.coalesce(
+                functions.regexp_extract("duration", r"T(\d+)H", 1).cast("double"),
+                functions.lit(0.0),
+            )
+            * 3600
+            + functions.coalesce(
+                functions.regexp_extract("duration", r"(?:T|H)(\d+)M", 1).cast(
+                    "double"
+                ),
+                functions.lit(0.0),
+            )
+            * 60
+            + functions.coalesce(
+                functions.regexp_extract(
+                    "duration", r"(?:T|M)([0-9]+(?:\.[0-9]+)?)S", 1
+                ).cast("double"),
+                functions.lit(0.0),
+            )
+        )
+        duration_stats = (
+            videos.where(functions.col("duration").isNotNull())
+            .withColumn("duration_seconds", duration_seconds)
+            .agg(
+                functions.count("duration_seconds").alias("count"),
+                functions.min("duration_seconds").alias("minimum"),
+                functions.avg("duration_seconds").alias("average"),
+                functions.max("duration_seconds").alias("maximum"),
+            )
+            .first()
+        )
+        print(
+            "  Duration statistics: "
+            f"count={duration_stats['count']:,}, "
+            f"min={_format_duration_seconds(duration_stats.minimum)}, "
+            f"avg={_format_duration_seconds(duration_stats.average)}, "
+            f"max={_format_duration_seconds(duration_stats.maximum)}"
+        )
+
+        print("  Top 10 videos by likes:")
+        for row in (
+            video_current.where(functions.col("like_count").isNotNull())
+            .orderBy(functions.col("like_count").desc())
+            .limit(10)
+            .collect()
+        ):
+            print(f"    {row.like_count:,} | {_short(row.title)} | {row.video_id}")
+
+        print("  Top 10 videos by comments:")
+        for row in (
+            video_current.where(functions.col("comment_count").isNotNull())
+            .orderBy(functions.col("comment_count").desc())
+            .limit(10)
+            .collect()
+        ):
+            print(
+                f"    {row.comment_count:,} | {_short(row.title)} | {row.video_id}"
+            )
+
+        print("  20 recent videos:")
+        for row in (
+            video_current.orderBy(functions.col("published_at").desc())
+            .limit(20)
+            .collect()
+        ):
+            print(
+                f"    {row.published_at} | {row.video_id} | "
+                f"{_short(row.channel_title, 24)} | {_short(row.title, 48)} | "
+                f"category={_short(row.category_id)} | duration={_short(row.duration)} | "
+                f"views={row.view_count:,} | likes={_short(row.like_count)} | "
+                f"comments={_short(row.comment_count)} | tags={_short(row.tags, 56)}"
             )
 
         gold_catalog, gold_namespace = gold_table_names()
