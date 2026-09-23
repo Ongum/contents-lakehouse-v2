@@ -58,5 +58,27 @@ services:
     cpus: 2.0
     restart: "no"
 
+  collector:
+    profiles: ["collector"]
+    build:
+      context: ..
+      dockerfile: infra/collector/Dockerfile
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:-contents-lakehouse}
+    volumes:
+      - ../:/opt/project:ro
+    working_dir: /opt/project
+    entrypoint: ["python"]
+    command: ["src/verify_advertising_bronze.py"]
+    mem_limit: 256m
+    cpus: 0.5
+    restart: "no"
+
 volumes:
   minio-data:
