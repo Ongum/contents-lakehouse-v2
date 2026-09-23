@@ -4,4 +4,6 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 WORKDIR /opt/project
+COPY src/ /opt/project/src/
+
 ENTRYPOINT ["python"]

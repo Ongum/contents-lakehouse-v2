@@ -178,6 +178,21 @@ Connect artist and content data with advertising and product-performance data.
 
 ---
 
+## Cloud Bronze collection
+
+Cloud collection is intended to run as short-lived Cloud Run Jobs that write
+raw source responses to the pre-provisioned GCS Bronze bucket. Configure
+`BRONZE_STORAGE_BACKEND=gcs`, `GCP_PROJECT_ID`, and `GCS_BUCKET` at runtime;
+`GCS_BRONZE_BUCKET` remains a temporary compatibility alias. Authentication uses
+the Cloud Run runtime identity through Application Default Credentials rather
+than a service-account key file.
+
+The collection-only commands are:
+
+* `python src/run_youtube_collection.py`
+* `python src/run_mediawiki_collection.py`
+* `python src/run_advertising_collection.py`
+
 ## Local scheduled pipelines
 
 The production-style one-shot entrypoints are intended for invocation through

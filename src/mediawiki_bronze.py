@@ -158,6 +158,11 @@ def build_bronze_record(
 class MediaWikiBronzeStorage(BronzeStorage):
     """Store one immutable object for each MediaWiki page revision."""
 
+    CONDITIONAL_CONFLICT_CODES = {
+        "PreconditionFailed",
+        "ConditionalRequestConflict",
+    }
+
     @staticmethod
     def serialize_record(record: dict[str, Any]) -> bytes:
         missing = MEDIAWIKI_BRONZE_FIELDS - record.keys()
@@ -197,6 +202,42 @@ class MediaWikiBronzeStorage(BronzeStorage):
             f"page_id={page_id}/revision_id={revision_id}/page.json"
         )
 
+    @staticmethod
+    def _records_are_equivalent(
+        existing: dict[str, Any], candidate: dict[str, Any]
+    ) -> bool:
+        existing_identity = dict(existing)
+        candidate_identity = dict(candidate)
+        existing_identity.pop("ingested_at", None)
+        candidate_identity.pop("ingested_at", None)
+        return existing_identity == candidate_identity
+
+    def _verify_existing(
+        self,
+        object_name: str,
+        candidate: dict[str, Any],
+        existing_content: bytes | None = None,
+    ) -> bool:
+        try:
+            existing = json.loads(
+                existing_content
+                if existing_content is not None
+                else self._read_bytes(object_name)
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise BronzeStorageError(
+                f"Invalid existing MediaWiki Bronze object {object_name}."
+            ) from error
+        if not isinstance(existing, dict):
+            raise BronzeStorageError(
+                f"Invalid existing MediaWiki Bronze object {object_name}."
+            )
+        if self._records_are_equivalent(existing, candidate):
+            return True
+        raise BronzeStorageError(
+            f"MediaWiki Bronze object has conflicting content: {object_name}."
+        )
+
     def write_record(self, record: dict[str, Any]) -> tuple[str, bool]:
         content = self.serialize_record(record)
         object_name = self.object_name(record)
@@ -209,18 +250,8 @@ class MediaWikiBronzeStorage(BronzeStorage):
                     f"Unable to check MediaWiki Bronze object {object_name}."
                 ) from error
         else:
-            try:
-                existing = json.loads(existing_content)
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                raise BronzeStorageError(
-                    f"Invalid existing MediaWiki Bronze object {object_name}."
-                ) from error
-            identity = ("source", "edition", "page_id", "revision_id")
-            if all(existing.get(field) == record[field] for field in identity):
-                return object_name, False
-            raise BronzeStorageError(
-                f"MediaWiki Bronze object has conflicting identity: {object_name}."
-            )
+            self._verify_existing(object_name, record, existing_content)
+            return object_name, False
 
         try:
             self.client.put_object(
@@ -231,6 +262,9 @@ class MediaWikiBronzeStorage(BronzeStorage):
                 content_type="application/json",
             )
         except Exception as error:
+            if getattr(error, "code", None) in self.CONDITIONAL_CONFLICT_CODES:
+                self._verify_existing(object_name, record)
+                return object_name, False
             raise BronzeStorageError(
                 f"Unable to write MediaWiki Bronze object {object_name}."
             ) from error

@@ -160,9 +160,38 @@ class MediaWikiBronzeTest(unittest.TestCase):
         conflicting = dict(record, source="other")
         client.objects[("lakehouse", object_name)] = json.dumps(conflicting).encode()
 
-        with self.assertRaisesRegex(BronzeStorageError, "conflicting identity"):
+        with self.assertRaisesRegex(BronzeStorageError, "conflicting content"):
             storage.write_record(record)
         self.assertEqual(client.put_count, 0)
+
+    def test_same_revision_with_conflicting_content_is_not_overwritten(self):
+        client = FakeMinioClient()
+        storage = MediaWikiBronzeStorage(client, "lakehouse")
+        original = build_bronze_record(parse_latest_revision(api_payload()))
+        conflicting = dict(original, raw_wikitext="different revision content")
+
+        object_name, _ = storage.write_record(original)
+        with self.assertRaisesRegex(BronzeStorageError, "conflicting content"):
+            storage.write_record(conflicting)
+
+        self.assertEqual(storage.read_record(object_name), original)
+        self.assertEqual(client.put_count, 1)
+
+    def test_existing_minio_bucket_is_still_created_by_shared_behavior(self):
+        class BucketClient(FakeMinioClient):
+            def __init__(self):
+                super().__init__()
+                self.created = []
+
+            def bucket_exists(self, bucket):
+                return False
+
+            def make_bucket(self, bucket):
+                self.created.append(bucket)
+
+        client = BucketClient()
+        MediaWikiBronzeStorage(client, "lakehouse").ensure_bucket()
+        self.assertEqual(client.created, ["lakehouse"])
 
 
 if __name__ == "__main__":

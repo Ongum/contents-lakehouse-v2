@@ -96,7 +96,7 @@ class BronzeStorage:
                 self.client.make_bucket(self.bucket)
         except Exception as error:
             raise BronzeStorageError(
-                f"Unable to prepare MinIO bucket {self.bucket}."
+                f"Unable to prepare object storage bucket {self.bucket}: {error}"
             ) from error
 
     @staticmethod
