@@ -282,5 +282,4 @@ required or emulated for local execution.
 - always-running Spark workers
 - managed GCP processing resources in the local runtime
 - cloud-specific canonical data models
-- a completed common Artist Activity Timeline contract
 - completed cross-domain analytical Gold marts

@@ -29,15 +29,15 @@ Status values: `DONE`, `IN PROGRESS`, `PLANNED`.
 ## M04 — Artist Activity Timeline
 
 - **Objective:** Unify artist-related temporal events from existing domains into a common timeline contract suitable for later cross-domain analysis.
-- **Status:** PLANNED — NEXT
-- **Deliverables:** A documented timeline contract, mappings from existing domain events, and focused validation fixtures.
+- **Status:** DONE
+- **Deliverables:** A deterministic Silver timeline and evidence bridge, explicit YouTube/artist-event/Advertising projections, Iceberg merge definitions, temporal/reference validation, and focused regression tests.
 - **Completion criteria:** Implemented domain events can be queried in chronological order with canonical artist identity, event time semantics, source lineage, and no invented relationships.
-- **Report:** To be created when the milestone is completed.
+- **Report:** [M04 Artist Activity Timeline](reports/M04-artist-activity-timeline.md)
 
 ## M05 — Cross-domain Analytical Gold
 
 - **Objective:** Provide analytics-ready views that combine completed domains through existing canonical relationships.
-- **Status:** PLANNED
+- **Status:** PLANNED — NEXT
 - **Deliverables:** Cross-domain Gold contracts, incremental transformations, and query examples.
 - **Completion criteria:** Validated Gold datasets answer defined cross-domain questions without display-name joins or duplicated raw data.
 - **Report:** To be created when the milestone is completed.

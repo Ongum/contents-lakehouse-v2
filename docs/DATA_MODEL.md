@@ -394,6 +394,54 @@ field-evidence tables are defined; and `campaign_source` remains the legacy
 lineage contract. Discovery tables remain readable but are deprecated as an
 Advertising source. This milestone performs no live Iceberg migration.
 
+## Artist activity timeline
+
+`artist_activity_timeline` is an additive Silver integration projection. It
+does not replace or merge the YouTube, artist/event, or Advertising business
+models. Its grain is one canonical artist × one supported source-domain
+temporal fact. `timeline_event_id` is deterministic from `artist_id`, source
+domain, source entity type and ID, and event type; a corrected time updates the
+same logical event rather than creating a second identity. The UUID5 input is a
+canonical compact JSON array of those components, so delimiter characters
+inside an existing ID or event type cannot make two component tuples identical.
+
+| Column | Type | Rule |
+| --- | --- | --- |
+| `timeline_event_id` | string | Primary key; deterministic projection identity |
+| `artist_id` | string | Foreign key to canonical `artist.artist_id` |
+| `event_type` | string | Source-supported fact such as `VIDEO_PUBLISHED`, an existing `artist_event.event_type`, or a supported Advertising event |
+| `event_name` | string | Human-readable source-domain label |
+| `event_at` | timestamp | UTC value; date-only facts use the UTC day boundary and must be read with `temporal_precision` |
+| `temporal_precision` | string | `TIMESTAMP` or `DATE` |
+| `time_semantics` | string | `EVENT_TIME`, `PUBLICATION_TIME`, or `EFFECTIVE_TIME` |
+| `observed_at` | timestamp, nullable | When the pipeline first observed the supporting record when available; distinct from `event_at` |
+| `source_domain` | string | `YOUTUBE`, `ARTIST_EVENT`, or `ADVERTISING` |
+| `source_entity_type` | string | Type of canonical/source entity referenced by the event |
+| `source_entity_id` | string | Existing canonical or source identity; no display-name identity |
+| `source_reference` | string, nullable | Bronze object or human-verifiable source URL when available |
+
+`artist_activity_timeline_evidence` has one row per
+(`timeline_event_id`, `source_evidence_id`) and preserves zero-to-many official
+Advertising evidence links without using provenance as a business join.
+
+The source projections are deliberately narrow:
+
+- YouTube produces `VIDEO_PUBLISHED` from exact `youtube_video.published_at`;
+  the earliest available metric observation is retained separately as
+  `observed_at`.
+- `artist_event` rows preserve their existing event type and declared
+  `DATE`/`TIMESTAMP` precision through `event_artist`.
+- Advertising produces campaign announcement (`EVENT_TIME`) and campaign start
+  or end (`EFFECTIVE_TIME`) facts only from the corresponding canonical fields.
+  An official evidence publication date produces a separate
+  `OFFICIAL_EVIDENCE_PUBLISHED` fact and never becomes a campaign or
+  relationship effective date.
+
+Rows with no supported event time are not projected. Unknown optional
+provenance and observation values remain null; no `UNKNOWN` dimension entity is
+created. The projection is suitable for later event-window analysis, but M04
+does not calculate windows, correlations, or causal effects.
+
 ## Relationships
 
 ```text
@@ -403,7 +451,9 @@ artist (GROUP/PERSON) 1 ──< artist_external_identifier
           │
           ├──< event_artist >── artist_event
           │
-          └──< youtube_channel 1 ──< youtube_video 1 ──< video_metrics_snapshot
+          ├──< youtube_channel 1 ──< youtube_video 1 ──< video_metrics_snapshot
+          │
+          └──< artist_activity_timeline ──< artist_activity_timeline_evidence
 ```
 
 - Artists can be related to other artists over explicit historical periods.
@@ -424,8 +474,8 @@ event-to-video foreign key is required for the current design.
 
 | Layer | Owns | Responsibility |
 | --- | --- | --- |
-| Bronze | Raw YouTube API responses and raw curated event inputs | Append source payloads with ingestion timestamp, source/endpoint metadata, request context, and a reproducible object identity. Bronze is not the canonical relational model. |
-| Silver | Artist, event, YouTube, and advertising entity and relationship tables defined above | Parse, normalize, deduplicate, enforce the keys above, and retain lineage back to Bronze records. Silver Iceberg tables are the canonical data model. |
+| Bronze | Raw source responses, discovery captures, and curated inputs | Append source payloads with ingestion timestamp, source/endpoint metadata, request context, and a reproducible object identity. Bronze is not the canonical relational model. |
+| Silver | Artist, event, YouTube, Advertising, and timeline entity, relationship, and integration tables defined above | Parse, normalize, deduplicate, enforce the keys above, and retain lineage back to Bronze or official evidence. Silver Iceberg tables are the canonical data model. |
 | Gold | Minimal analytics-ready views/tables derived from Silver, including hourly and rolling 24-hour video growth with artist, channel, and event context | Calculate count deltas from actual UTC observation times and serve DuckDB analysis incrementally. Keep reusable calculations here; do not copy raw payloads or create duplicate master data. |
 
 Gold does not own new identities. It uses Silver primary and foreign keys so an
