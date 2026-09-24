@@ -1,33 +1,18 @@
 # Contents Lakehouse
 
-A data engineering project for collecting, storing, and analyzing content ecosystem data using a Lakehouse architecture.
+A data engineering project for collecting, normalizing, and analyzing artist, content, engagement, and commercial evidence with a Lakehouse architecture.
 
 ## 1. Project Goal
 
 The goal of this project is to build a scalable **Content Intelligence Lakehouse** that tracks how artists, content, audience engagement, and advertising activities change over time.
 
-The project focuses on three data domains:
+The repository currently implements three connected data domains:
 
-1. **Artist Data**
+1. **YouTube:** channel and video metadata, metric snapshots, and growth-oriented analytical outputs.
+2. **MediaWiki / artist metadata:** canonical artists, members, releases, and events with source lineage.
+3. **Advertising:** discovery staging, official evidence, and canonical organization, brand, campaign, product, creative, market, and artist-participation relationships.
 
-   * Artist and member information
-   * Releases
-   * Activities and events
-
-2. **Content & Engagement Data**
-
-   * YouTube videos
-   * Spotify releases and metrics
-   * Content publication history
-   * Views, likes, comments, and other engagement metrics
-   * Daily snapshots for time-series analysis
-
-3. **Advertising Data**
-
-   * Brand and product information
-   * Advertising campaigns
-   * Artist–brand relationships
-   * Campaign and product performance
+See [the data model](docs/DATA_MODEL.md) for table contracts and [the roadmap](docs/ROADMAP.md) for current milestone status. This overview intentionally does not duplicate them.
 
 The long-term goal is to connect these domains and analyze relationships between:
 
@@ -39,9 +24,9 @@ The long-term goal is to connect these domains and analyze relationships between
 
 The first analysis target is **RESCENE**, a K-pop artist group.
 
-Rather than collecting many artists from the beginning, the first version of the project focuses on building a complete end-to-end pipeline for a single artist.
+Rather than collecting many artists from the beginning, the project uses one artist to build and validate its domain pipelines and relationships.
 
-The MVP starts from two YouTube channels relevant to RESCENE analysis:
+The YouTube pipeline starts from two channels relevant to RESCENE analysis:
 
 * `@RESCENE_official`
 * `@helloiamwoninicetomeetyou`
@@ -58,8 +43,6 @@ The initial analysis will investigate:
 * Growth patterns before and after major activities or releases
 * Potential growth inflection points
 * Differences between official and external content
-
-Once the pipeline is stable, additional artists and platforms can be added.
 
 ---
 
@@ -86,69 +69,20 @@ Analytics-ready datasets
 Analysis / Visualization / ML
 ```
 
-The initial local environment will be built around:
+The local environment is built around:
 
 * MinIO
 * Apache Iceberg
 * Apache Spark
 * DuckDB
 
-The architecture will later be migrated and benchmarked on GCP.
+The same logical storage boundaries support local execution and incremental cloud-processing expansion.
 
 ---
 
 ## 4. Development Strategy
 
-Development is divided into incremental stages.
-
-### Phase 1 — Local MVP
-
-Build a complete pipeline for RESCENE YouTube data.
-
-```text
-YouTube API
-    ↓
-Bronze
-    ↓
-Silver
-    ↓
-Iceberg
-    ↓
-Daily Snapshot
-    ↓
-DuckDB
-    ↓
-Analysis
-```
-
-### Phase 2 — Data Expansion
-
-Add additional sources such as:
-
-* Spotify
-* External YouTube content
-* Artist activities and events
-
-### Phase 3 — GCP Migration
-
-Migrate the local architecture to GCP while preserving the same logical data model.
-
-Compare local and cloud environments using measurable workloads.
-
-### Phase 4 — Scale & Reliability
-
-Perform controlled load tests and measure:
-
-* Processing time
-* Throughput
-* Memory usage
-* Query performance
-* Failure and recovery behavior
-* Cloud cost
-
-### Phase 5 — Advertising Intelligence
-
-Connect artist and content data with advertising and product-performance data.
+Work is organized as bounded milestones with explicit completion criteria, validation, and reports. [The roadmap](docs/ROADMAP.md) is the canonical source for milestone order and status; durable engineering decisions are recorded under [`docs/adr/`](docs/adr/).
 
 ---
 
@@ -168,19 +102,13 @@ Connect artist and content data with advertising and product-performance data.
 
 ## Current Status
 
-**Stage:** Project initialization
-
-**Current target:** RESCENE
-
-**Current milestone:**
-
-> Build a reproducible end-to-end YouTube data pipeline for RESCENE in the local Lakehouse environment.
+The local lakehouse foundation and the YouTube and Advertising domain milestones are implemented, alongside MediaWiki-backed artist metadata. RESCENE remains the initial analysis target. See [the roadmap](docs/ROADMAP.md) for the authoritative current and next milestone status.
 
 ---
 
 ## Cloud Bronze collection
 
-Cloud collection is intended to run as short-lived Cloud Run Jobs that write
+Cloud collection entrypoints can run as short-lived Cloud Run Jobs that write
 raw source responses to the pre-provisioned GCS Bronze bucket. Configure
 `BRONZE_STORAGE_BACKEND=gcs`, `GCP_PROJECT_ID`, and `GCS_BUCKET` at runtime;
 `GCS_BRONZE_BUCKET` remains a temporary compatibility alias. Authentication uses

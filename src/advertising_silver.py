@@ -8,14 +8,23 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 if __package__:
+    from .advertising_official_ingestion import DongAOtsukaNewsAdapter
     from .mvp_config import RESCENE_ARTIST_ID
 else:
+    from advertising_official_ingestion import DongAOtsukaNewsAdapter
     from mvp_config import RESCENE_ARTIST_ID
 
 
 ADVERTISING_PREFIX = "bronze/advertising/"
 NARANGD_SOURCE_IDENTIFIER = "donga-otsuka:news:672"
-RELATIONSHIP_TYPES = {"MODEL"}
+RELATIONSHIP_TYPES = {
+    "MODEL",
+    "AMBASSADOR",
+    "ENDORSEMENT",
+    "SPONSORED_CONTENT",
+    "COLLABORATION",
+    "EVENT_PARTNERSHIP",
+}
 
 
 @dataclass
@@ -24,10 +33,21 @@ class AdvertisingSilverResult:
     brands: list[dict[str, Any]] = field(default_factory=list)
     products: list[dict[str, Any]] = field(default_factory=list)
     product_categories: list[dict[str, Any]] = field(default_factory=list)
+    product_category_assignments: list[dict[str, Any]] = field(default_factory=list)
+    product_tags: list[dict[str, Any]] = field(default_factory=list)
+    product_tag_assignments: list[dict[str, Any]] = field(default_factory=list)
+    source_evidence: list[dict[str, Any]] = field(default_factory=list)
     campaigns: list[dict[str, Any]] = field(default_factory=list)
+    campaign_brands: list[dict[str, Any]] = field(default_factory=list)
+    advertisement_creatives: list[dict[str, Any]] = field(default_factory=list)
+    creative_tags: list[dict[str, Any]] = field(default_factory=list)
+    creative_tag_assignments: list[dict[str, Any]] = field(default_factory=list)
+    canonical_field_evidence: list[dict[str, Any]] = field(default_factory=list)
     campaign_artists: list[dict[str, Any]] = field(default_factory=list)
     campaign_products: list[dict[str, Any]] = field(default_factory=list)
     campaign_sources: list[dict[str, Any]] = field(default_factory=list)
+    markets: list[dict[str, Any]] = field(default_factory=list)
+    campaign_markets: list[dict[str, Any]] = field(default_factory=list)
     market_metrics: list[dict[str, Any]] = field(default_factory=list)
     invalid_records: list[dict[str, Any]] = field(default_factory=list)
 
@@ -133,59 +153,32 @@ def transform_advertising_bronze(
         result.invalid_records.append(_invalid(source_reference, str(error)))
         return result
 
-    has_model_evidence = bool(
-        re.search(
-            r"나랑드사이다\s*모델로\s*걸그룹\s*리센느\s*\(RESCENE\)를\s*발탁",
-            text,
+    try:
+        official_evidence = DongAOtsukaNewsAdapter().parse(
+            raw_content, observed_at=retrieved_at
         )
-    )
-    if not has_model_evidence:
+    except ValueError as error:
+        result.invalid_records.append(_invalid(source_reference, str(error)))
+        return result
+    if official_evidence.relationship_type != "MODEL":
         result.invalid_records.append(
             _invalid(source_reference, "Missing explicit Narangd/RESCENE model evidence.")
         )
         return result
 
-    organization_supported = bool(re.search(r"동아오츠카[^.]{0,80}나랑드사이다", text))
-    organization = organization_id("Dong-A Otsuka") if organization_supported else None
-    if organization is not None:
-        result.organizations.append(
-            {
-                "organization_id": organization,
-                "organization_name": "Dong-A Otsuka",
-            }
-        )
-
-    narangd_brand_id = brand_id("Narangd Cider")
-    result.brands.append(
-        {
-            "brand_id": narangd_brand_id,
-            "brand_name": "Narangd Cider",
-            "organization_id": organization,
-        }
+    if __package__:
+        from .advertising_official_silver import transform_official_evidence
+    else:
+        from advertising_official_silver import transform_official_evidence
+    canonical = transform_official_evidence(
+        official_evidence, bronze_reference=source_reference
     )
-
-    model_campaign_id = campaign_id(narangd_brand_id, "MODEL", RESCENE_ARTIST_ID)
-    result.campaigns.append(
-        {
-            "campaign_id": model_campaign_id,
-            "campaign_name": None,
-            "relationship_type": "MODEL",
-            "announced_at": None,
-            "campaign_start_date": None,
-            "campaign_end_date": None,
-            "status": None,
-        }
+    result = canonical.silver
+    organization = (
+        result.organizations[0]["organization_id"] if result.organizations else None
     )
-    result.campaign_artists.append(
-        {
-            "campaign_artist_id": _stable_id(
-                "campaign_artist", f"{model_campaign_id}:{RESCENE_ARTIST_ID}"
-            ),
-            "campaign_id": model_campaign_id,
-            "artist_id": RESCENE_ARTIST_ID,
-            "participation_role": "MODEL",
-        }
-    )
+    narangd_brand_id = result.brands[0]["brand_id"]
+    model_campaign_id = result.campaigns[0]["campaign_id"]
 
     sales_match = re.search(
         r"나랑드사이다의\s*한\s*달간\s*매출이\s*전년\s*동기\s*대비\s*(\d+(?:\.\d+)?)%\s*증가",
@@ -215,15 +208,8 @@ def transform_advertising_bronze(
                 "product_id": product,
             }
         )
-        if source_category_text:
-            result.product_categories.append(
-                {
-                    "category_id": _stable_id(
-                        "product_category", source_category_text
-                    ),
-                    "source_category_text": source_category_text,
-                }
-            )
+        # Source category text is evidence, not a normalized taxonomy assignment.
+        # A governed taxonomy process may populate product_category and its bridge.
 
     result.campaign_sources.append(
         {
@@ -248,15 +234,18 @@ def transform_advertising_bronze(
                 ),
                 "campaign_id": model_campaign_id,
                 "product_id": product,
+                "market_id": None,
                 "metric_type": "SALES_GROWTH",
                 "value": float(sales_match.group(1)),
                 "unit": "PERCENT",
                 "measurement_start": None,
                 "measurement_end": None,
+                "measurement_period_precision": None,
                 "observed_at": retrieved_at,
                 "comparison_type": "YOY",
                 "comparison_start": None,
                 "comparison_end": None,
+                "comparison_period_precision": None,
                 "channel": "online, company mall, convenience stores",
                 "scope": "one-month sales after model selection",
                 "asset_reference": None,
@@ -283,15 +272,18 @@ def transform_advertising_bronze(
                 ),
                 "campaign_id": model_campaign_id,
                 "product_id": product,
+                "market_id": None,
                 "metric_type": "CONTENT_VIEW_COUNT",
                 "value": value,
                 "unit": "VIEWS",
                 "measurement_start": None,
                 "measurement_end": None,
+                "measurement_period_precision": None,
                 "observed_at": retrieved_at,
                 "comparison_type": None,
                 "comparison_start": None,
                 "comparison_end": None,
+                "comparison_period_precision": None,
                 "channel": "Dong-A Otsuka official YouTube",
                 "scope": "cumulative Narangd Cider and RESCENE-related content views",
                 "asset_reference": None,

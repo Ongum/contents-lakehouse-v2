@@ -1,12 +1,22 @@
 import unittest
 
 from src.advertising_silver import (
+    AdvertisingSilverResult,
     brand_id,
     campaign_id,
     organization_id,
     transform_advertising_bronze,
 )
-from src.advertising_silver_iceberg import _merge_advertising
+from src.advertising_silver_iceberg import (
+    TABLE_DEFINITIONS,
+    _merge_advertising,
+    validate_advertising_silver_result,
+)
+from src.advertising_domain import (
+    QualitySeverity,
+    assess_advertising_quality,
+    source_evidence_id,
+)
 from src.mvp_config import RESCENE_ARTIST_ID
 
 
@@ -84,22 +94,15 @@ class AdvertisingSilverTest(unittest.TestCase):
         self.assertEqual(result.products[0]["source_category_text"], None)
         self.assertFalse(result.product_categories)
 
-    def test_source_category_text_is_preserved_without_normalized_taxonomy(self):
+    def test_source_category_text_does_not_create_normalized_taxonomy(self):
         content = ARTICLE + "<div>제품 카테고리: 제로칼로리 탄산음료.</div>"
         result = transform_advertising_bronze(SOURCE_REFERENCE, envelope(content))
 
         self.assertEqual(
             result.products[0]["source_category_text"], "제로칼로리 탄산음료"
         )
-        self.assertEqual(
-            result.product_categories,
-            [
-                {
-                    "category_id": result.product_categories[0]["category_id"],
-                    "source_category_text": "제로칼로리 탄산음료",
-                }
-            ],
-        )
+        self.assertFalse(result.product_categories)
+        self.assertFalse(result.product_category_assignments)
 
     def test_publication_and_campaign_dates_remain_distinct(self):
         result = transform_advertising_bronze(SOURCE_REFERENCE, envelope())
@@ -124,6 +127,11 @@ class AdvertisingSilverTest(unittest.TestCase):
         second = transform_advertising_bronze(SOURCE_REFERENCE, envelope())
 
         self.assertEqual(first, second)
+        validate_advertising_silver_result(first)
+        self.assertFalse(first.product_categories)
+        self.assertFalse(first.product_tags)
+        self.assertFalse(first.markets)
+        self.assertFalse(first.campaign_markets)
 
     def test_only_explicit_metrics_are_created_without_causal_inference(self):
         result = transform_advertising_bronze(SOURCE_REFERENCE, envelope())
@@ -133,6 +141,9 @@ class AdvertisingSilverTest(unittest.TestCase):
         self.assertEqual(metrics["SALES_GROWTH"]["unit"], "PERCENT")
         self.assertEqual(metrics["SALES_GROWTH"]["comparison_type"], "YOY")
         self.assertIsNone(metrics["SALES_GROWTH"]["measurement_start"])
+        self.assertIsNone(metrics["SALES_GROWTH"]["market_id"])
+        self.assertIsNone(metrics["SALES_GROWTH"]["measurement_period_precision"])
+        self.assertIsNone(metrics["SALES_GROWTH"]["comparison_period_precision"])
         self.assertIn("no causal effect", metrics["SALES_GROWTH"]["attribution_note"])
         self.assertEqual(metrics["CONTENT_VIEW_COUNT"]["value"], 18_000_000.0)
 
@@ -156,7 +167,252 @@ class AdvertisingSilverTest(unittest.TestCase):
 
     def test_unsupported_relationship_type_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported relationship_type"):
-            campaign_id("brand", "AMBASSADOR", RESCENE_ARTIST_ID)
+            campaign_id("brand", "CELEBRITY", RESCENE_ARTIST_ID)
+
+    def test_extended_tables_and_nullable_artist_relationship_are_defined(self):
+        for table in (
+            "product_category_assignment",
+            "product_tag",
+            "product_tag_assignment",
+            "market",
+            "campaign_market",
+            "advertisement_creative",
+            "source_evidence",
+            "canonical_field_evidence",
+            "campaign_brand",
+            "creative_tag",
+            "creative_tag_assignment",
+        ):
+            self.assertIn(table, TABLE_DEFINITIONS)
+        self.assertIn("parent_category_id STRING", TABLE_DEFINITIONS["product_category"])
+        self.assertIn("market_id STRING", TABLE_DEFINITIONS["campaign_market_metric"])
+        self.assertNotIn(
+            "relationship_type STRING NOT NULL",
+            TABLE_DEFINITIONS["advertising_campaign"],
+        )
+        self.assertIn("tag_type STRING", TABLE_DEFINITIONS["product_tag"])
+        self.assertIn(
+            "source_evidence_id STRING",
+            TABLE_DEFINITIONS["product_tag_assignment"],
+        )
+
+    def test_campaign_without_artist_is_valid(self):
+        result = AdvertisingSilverResult(
+            campaigns=[{
+                "campaign_id": "campaign-no-artist",
+                "campaign_name": None,
+                "relationship_type": None,
+                "announced_at": None,
+                "campaign_start_date": None,
+                "campaign_end_date": None,
+                "status": None,
+            }]
+        )
+
+        validate_advertising_silver_result(result)
+
+    def test_campaign_brand_validates_duplicates_and_foreign_references(self):
+        base = {
+            "campaign_id": "campaign",
+            "campaign_name": None,
+            "relationship_type": None,
+            "announced_at": None,
+            "campaign_start_date": None,
+            "campaign_end_date": None,
+            "status": None,
+        }
+        brand = {
+            "brand_id": "brand",
+            "brand_name": "Brand",
+            "organization_id": None,
+        }
+        valid = AdvertisingSilverResult(
+            brands=[brand], campaigns=[base],
+            campaign_brands=[{"campaign_id": "campaign", "brand_id": "brand"}],
+        )
+        validate_advertising_silver_result(valid)
+
+        duplicate = AdvertisingSilverResult(
+            brands=[brand], campaigns=[base],
+            campaign_brands=[
+                {"campaign_id": "campaign", "brand_id": "brand"},
+                {"campaign_id": "campaign", "brand_id": "brand"},
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "Duplicate campaign_brand"):
+            validate_advertising_silver_result(duplicate)
+
+        missing_campaign = AdvertisingSilverResult(
+            brands=[brand],
+            campaign_brands=[{"campaign_id": "missing", "brand_id": "brand"}],
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown campaign_id"):
+            validate_advertising_silver_result(missing_campaign)
+
+        missing_brand = AdvertisingSilverResult(
+            campaigns=[base],
+            campaign_brands=[{"campaign_id": "campaign", "brand_id": "missing"}],
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown brand_id"):
+            validate_advertising_silver_result(missing_brand)
+
+    def test_validation_rejects_bad_parents_duplicate_assignments_and_dates(self):
+        category_result = AdvertisingSilverResult(
+            product_categories=[{
+                "category_id": "child",
+                "category_name": "Child",
+                "parent_category_id": "missing",
+                "taxonomy_name": "products",
+                "taxonomy_version": "1",
+                "source_category_text": None,
+            }]
+        )
+        with self.assertRaisesRegex(ValueError, "category parent"):
+            validate_advertising_silver_result(category_result)
+
+        market_result = AdvertisingSilverResult(markets=[
+            {
+                "market_id": "a",
+                "market_code": "A",
+                "market_name": "A",
+                "market_type": "REGION",
+                "parent_market_id": "b",
+            },
+            {
+                "market_id": "b",
+                "market_code": "B",
+                "market_name": "B",
+                "market_type": "REGION",
+                "parent_market_id": "a",
+            },
+        ])
+        with self.assertRaisesRegex(ValueError, "Cyclic market parent"):
+            validate_advertising_silver_result(market_result)
+
+        assignment_result = AdvertisingSilverResult(
+            products=[{
+                "product_id": "product",
+                "brand_id": "brand",
+                "product_name": "Product",
+                "source_category_text": None,
+            }],
+            brands=[{
+                "brand_id": "brand",
+                "brand_name": "Brand",
+                "organization_id": None,
+            }],
+            product_tags=[{"tag_id": "tag", "tag_name": "TAG"}],
+            product_tag_assignments=[
+                {"product_id": "product", "tag_id": "tag"},
+                {"product_id": "product", "tag_id": "tag"},
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "Duplicate product_tag_assignment"):
+            validate_advertising_silver_result(assignment_result)
+
+        date_result = AdvertisingSilverResult(campaigns=[{
+            "campaign_id": "campaign",
+            "campaign_name": None,
+            "relationship_type": None,
+            "announced_at": None,
+            "campaign_start_date": "2026-02-02",
+            "campaign_end_date": "2026-02-01",
+            "status": None,
+        }])
+        with self.assertRaisesRegex(ValueError, "campaign_start_date"):
+            validate_advertising_silver_result(date_result)
+
+    def test_validation_rejects_unknown_foreign_key_style_reference(self):
+        result = AdvertisingSilverResult(
+            campaigns=[{
+                "campaign_id": "campaign",
+                "campaign_name": None,
+                "relationship_type": None,
+                "announced_at": None,
+                "campaign_start_date": None,
+                "campaign_end_date": None,
+                "status": None,
+            }],
+            campaign_markets=[{"campaign_id": "campaign", "market_id": "missing"}],
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown market_id"):
+            validate_advertising_silver_result(result)
+
+    def test_creative_date_role_and_evidence_references_are_validated(self):
+        result = AdvertisingSilverResult(
+            campaigns=[{
+                "campaign_id": "campaign",
+                "campaign_name": None,
+                "relationship_type": None,
+                "announced_at": None,
+                "campaign_start_date": None,
+                "campaign_end_date": None,
+                "status": None,
+            }],
+            campaign_artists=[{
+                "campaign_artist_id": "relationship",
+                "campaign_id": "campaign",
+                "artist_id": RESCENE_ARTIST_ID,
+                "participation_role": "UNSUPPORTED",
+            }],
+        )
+        with self.assertRaisesRegex(ValueError, "Unsupported participation_role"):
+            validate_advertising_silver_result(result)
+
+        result.campaign_artists = []
+        result.advertisement_creatives = [{
+            "creative_id": "creative",
+            "campaign_id": "campaign",
+            "brand_id": None,
+            "product_id": None,
+            "source_type": "STRUCTURED_PUBLIC_SOURCE",
+            "source_creative_id": "native-1",
+            "creative_type": "VIDEO",
+            "title": None,
+            "description": None,
+            "media_url": None,
+            "landing_url": None,
+            "platform": None,
+            "first_observed_at": "2026-09-25T00:00:00Z",
+            "last_observed_at": "2026-09-24T00:00:00Z",
+            "published_at": None,
+            "active_from": None,
+            "active_to": None,
+            "source_evidence_id": "missing",
+        }]
+        with self.assertRaisesRegex(ValueError, "source_evidence_id"):
+            validate_advertising_silver_result(result)
+
+    def test_quality_findings_are_explainable_and_non_mutating(self):
+        evidence = source_evidence_id("source", "record-1", "a" * 64)
+        result = AdvertisingSilverResult(
+            brands=[{"brand_id": "brand", "brand_name": "Brand", "organization_id": None}],
+            products=[
+                {"product_id": "p1", "brand_id": "brand", "product_name": "Face Mask", "source_category_text": None},
+                {"product_id": "p2", "brand_id": "brand", "product_name": " face   mask ", "source_category_text": None},
+            ],
+            campaigns=[{"campaign_id": "campaign", "campaign_name": None, "relationship_type": None, "announced_at": None, "campaign_start_date": None, "campaign_end_date": None, "status": None}],
+            campaign_artists=[{"campaign_artist_id": "relationship", "campaign_id": "campaign", "artist_id": RESCENE_ARTIST_ID, "participation_role": "MODEL"}],
+            source_evidence=[{
+                "source_evidence_id": evidence,
+                "source_name": "source",
+                "source_type": "OFFICIAL_BRAND",
+                "source_url": "https://example.test/record-1",
+                "source_record_id": "record-1",
+                "collected_at": "2026-09-24T00:00:00Z",
+                "published_at": None,
+                "content_hash": "a" * 64,
+                "authority_level": "OFFICIAL",
+                "raw_bronze_reference": "bronze/advertising/official_brand/record-1.json",
+                "verification_status": "VERIFIED",
+            }],
+        )
+        issues = assess_advertising_quality(result)
+        self.assertEqual(
+            {issue.severity for issue in issues},
+            {QualitySeverity.WARNING, QualitySeverity.UNRESOLVED},
+        )
+        self.assertEqual(len(result.products), 2)
 
     def test_iceberg_merge_uses_canonical_key_for_idempotency(self):
         class Frame:
@@ -203,6 +459,46 @@ class AdvertisingSilverTest(unittest.TestCase):
         self.assertTrue(all(f" ON {condition} " in sql for sql in spark.statements))
         self.assertTrue(all("WHEN MATCHED THEN UPDATE" in sql for sql in spark.statements))
         self.assertTrue(all("WHEN NOT MATCHED THEN INSERT" in sql for sql in spark.statements))
+
+    def test_campaign_brand_merge_uses_composite_key(self):
+        class Frame:
+            def createOrReplaceTempView(self, _view):
+                pass
+
+        class Catalog:
+            def dropTempView(self, _view):
+                pass
+
+        class Spark:
+            def __init__(self):
+                self.statements = []
+                self.catalog = Catalog()
+
+            def createDataFrame(self, _rows, schema):
+                return Frame()
+
+            def sql(self, statement):
+                self.statements.append(statement)
+
+        schema = type("Schema", (), {"fields": [
+            type("Field", (), {"name": "campaign_id"})(),
+            type("Field", (), {"name": "brand_id"})(),
+        ]})()
+        spark = Spark()
+        condition = (
+            "target.campaign_id = source.campaign_id AND "
+            "target.brand_id = source.brand_id"
+        )
+
+        _merge_advertising(
+            spark,
+            "campaign_brand",
+            [{"campaign_id": "campaign", "brand_id": "brand"}],
+            schema,
+            condition,
+        )
+
+        self.assertIn(f" ON {condition} ", spark.statements[0])
 
 
 if __name__ == "__main__":

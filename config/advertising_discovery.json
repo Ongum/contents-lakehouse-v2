@@ -1,0 +1,50 @@
+{
+  "market_code": "KR",
+  "query_templates": [
+    "{artist} 광고 모델",
+    "{artist} 전속 모델",
+    "{artist} 브랜드 모델",
+    "{artist} 앰배서더",
+    "{artist} 광고 캠페인",
+    "{artist} 브랜드 협업"
+  ],
+  "commercial_signals": {
+    "MODEL": [
+      "광고 모델",
+      "전속 모델",
+      "브랜드 모델",
+      "모델로 발탁"
+    ],
+    "AMBASSADOR": [
+      "앰배서더",
+      "앰버서더"
+    ],
+    "CAMPAIGN": [
+      "광고 캠페인",
+      "브랜드 캠페인"
+    ],
+    "COLLABORATION": [
+      "브랜드 협업",
+      "브랜드와 협업",
+      "협업 캠페인",
+      "brand collaboration"
+    ],
+    "ENDORSEMENT": [
+      "endorsement"
+    ],
+    "SPONSORSHIP": [
+      "협찬 캠페인",
+      "브랜드 후원",
+      "sponsored campaign"
+    ]
+  },
+  "artists": [
+    {
+      "artist_id": "artist_rescene",
+      "korean_name": "리센느",
+      "english_name": "RESCENE",
+      "discovery_enabled": true,
+      "priority": 100
+    }
+  ]
+}

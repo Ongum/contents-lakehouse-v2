@@ -6,8 +6,9 @@ This model supports the current local MVP: RESCENE, its relevant YouTube
 channels and videos, hourly video metrics, and artist events used to give
 metric changes context. The artist model also defines the minimal future-facing
 structure needed for groups, people, historical membership, and shared events;
-no external artist or event ingestion is implemented yet. Other platforms,
-advertising, and machine-learning features remain out of scope. All timestamps
+no external artist or event ingestion is implemented yet. Advertising Silver
+supports the current Narangd evidence and normalized comparison dimensions;
+other platforms and machine-learning features remain out of scope. All timestamps
 in this model are stored in UTC.
 
 ## Core entities
@@ -169,6 +170,230 @@ Many-to-many link between events and participating artists.
 The composite primary key (`event_id`, `artist_id`) supports group-level,
 person-level, and multi-artist events without copying the event row.
 
+## Advertising Silver
+
+`advertiser_organization`, `brand`, `product`, `advertising_campaign`,
+`campaign_product`, `campaign_source`, and `campaign_market_metric` retain their
+existing identities. `advertising_campaign.relationship_type` is nullable for
+backward compatibility; `campaign_artist.participation_role` is authoritative.
+A campaign with no `campaign_artist` row is a valid non-artist campaign.
+
+`product_category` is a versioned hierarchy keyed by `category_id`, with required
+`category_name`, `taxonomy_name`, and `taxonomy_version`, nullable
+`parent_category_id`, and nullable source evidence in `source_category_text`.
+`product_category_assignment` links products to categories. Tags use independent
+`product_tag` and `product_tag_assignment` tables and do not participate in the
+category hierarchy.
+
+`market` is a hierarchy keyed by `market_id`, with unique governed `market_code`,
+`market_name`, `market_type`, and nullable `parent_market_id`. `campaign_market`
+records campaign coverage. Nullable `campaign_market_metric.market_id` records
+the geography supported for that measurement. Metrics also carry nullable
+`measurement_period_precision` and `comparison_period_precision`; unknown values
+remain null. Campaign dates describe campaign existence, measurement and
+comparison dates describe metric periods, and `observed_at` records when the
+pipeline observed the evidence.
+
+The Narangd/RESCENE campaign keeps its existing campaign ID and legacy `MODEL`
+value. The current source does not assign a normalized category, tag, market, or
+business-period date, so those relationships remain absent or null.
+
+### Advertising table grains
+
+| Table | Grain and purpose |
+| --- | --- |
+| `advertiser_organization` | One canonical legal or operating organization; it may own many brands. |
+| `brand` | One canonical brand, optionally linked to its organization. |
+| `product` | One canonical product under a brand; source-native category text remains evidence. |
+| `product_category` | One node in one named/versioned hierarchical taxonomy. |
+| `product_category_assignment` | One product/category association. |
+| `product_tag` | One normalized, typed product attribute/tag, separate from category hierarchy. |
+| `product_tag_assignment` | One product/tag association with nullable evidence and observation time for compatibility. |
+| `advertising_campaign` | One resolved commercial campaign; artist, product, market, metric, and creative relationships are optional. |
+| `campaign_brand` | One canonical campaign/brand association, keyed by (`campaign_id`, `brand_id`). |
+| `advertisement_creative` | One source creative identifier; campaign, brand, and product may remain unresolved and media stays external. |
+| `creative_tag` | One source-native or normalized creative descriptor such as scene/object/mood, not a product attribute. |
+| `creative_tag_assignment` | One creative/tag observation supported by evidence. |
+| `campaign_artist` | One explicit artist participation in one campaign; group and member rows are independent facts. |
+| `campaign_product` | One campaign/product association. |
+| `market` | One governed country, region, or global node. |
+| `campaign_market` | One campaign/market association. |
+| `campaign_source` | Legacy campaign-specific lineage retained for existing records. |
+| `campaign_market_metric` | One observed metric for a nullable campaign/product/market and explicit periods; metrics are optional. |
+| `source_evidence` | One immutable source observation identified independently of canonical entities. |
+| `canonical_field_evidence` | One source assertion for one important entity field, including asserted and selected values. |
+
+`advertisement_creative` is distinct from `advertising_campaign`: a campaign can
+have many creatives, and an unresolved creative can exist without a campaign.
+Organization, brand, and product identities are also distinct. AI-detected
+creative keywords remain creative tags unless separate evidence supports a
+product attribute.
+
+Allowed artist roles are `MODEL`, `AMBASSADOR`, `ENDORSEMENT`,
+`SPONSORED_CONTENT`, `COLLABORATION`, and `EVENT_PARTNERSHIP`. Generic keywords
+do not create these relationships.
+
+### Evidence, resolution, conflicts, and quality
+
+`source_evidence` records source name/type, URL and native record identifier,
+collection/publication times, content hash, authority level, immutable Bronze
+reference, and verification status. Authority levels are `OFFICIAL`,
+`STRUCTURED_PUBLIC_SOURCE`, `PLATFORM_SOURCE`, and `DERIVED`; they are labels,
+not numerical confidence scores.
+
+`canonical_field_evidence` links brand, product, category, participation role,
+and campaign date values to assertions. Multiple assertions are retained.
+`is_selected` and `selection_reason` explain the chosen value; differing values
+produce a downstream conflict flag rather than silent overwrite. `source_count`,
+`conflicting_values`, and `conflict_flag` are derived in quality or Gold work.
+
+Official advertising evidence ingestion separates three concerns:
+
+```text
+source acquisition (bounded HTTP fetch)
+    -> source adapter (native ID, dates, explicit factual wording)
+    -> normalized official-evidence contract and validation
+    -> minimal factual Bronze provenance
+    -> source_evidence and canonical_field_evidence
+    -> supported canonical Advertising Silver entities/relationships
+```
+
+Shared code owns URL normalization, observation timestamps, factual content
+hashes, evidence identity, explicit relationship normalization, validation, and
+minimal provenance envelopes. Each official domain owns a small adapter for its
+page structure, native identifiers, and date semantics. A page that merely shows
+campaign participation retains a null relationship role. Publication dates are
+never copied into relationship or campaign start dates.
+
+Minimal factual Bronze is supported alongside the legacy full-document capture
+for sources whose raw-page retention rights remain unresolved. Its proposed
+content-addressed layout is
+`bronze/advertising/official_brand/source=<source>/source_record_id=<id>/content_hash=<hash>/evidence.json`.
+The payload contains normalized factual evidence and provenance, not full page
+HTML, images, scripts, cookies, or media. Preparation is implemented; this
+milestone performs no production write or live Iceberg migration.
+
+The fixture-driven canonical transform now completes this path for the Dong-A
+and Domino adapters. Resolution uses explicit alias mappings only: unknown
+artists, brands, organizations, products, and markets remain `UNRESOLVED` and do
+not create placeholder entities. Dong-A `idx=672` retains the legacy Narangd
+campaign ID. A new campaign with an explicit source campaign name uses a stable
+brand-plus-campaign-name identity, so its ID is not coupled to the participating
+artist. `campaign_brand` stores the canonical many-to-many campaign/brand
+relationship. The corresponding `canonical_field_evidence` assertion remains as
+provenance explaining why the relationship is selected; it is no longer used as
+the business join itself.
+
+The pure `gold_artist_commercial_intelligence` projection uses one row per
+artist × campaign relationship × product × market. When product or market is
+unresolved it emits one row with the corresponding value null and sets
+`unresolved_flag=true`; it never creates an `UNKNOWN` dimension entity or drops
+the valid commercial relationship. `has_official_evidence` is true only when the
+projection can trace the input batch to `source_evidence`.
+
+Resolution proceeds through normalized exact identifier/name, source identifier,
+explicit alias, deterministic contextual matching, then unresolved/manual review.
+Fuzzy similarity alone never merges entities. Source-native names remain in
+evidence or future explicit alias mappings.
+
+Quality findings use `ERROR`, `WARNING`, or `UNRESOLVED`. Errors cover duplicate
+source records, invalid foreign keys, hierarchy cycles, bad date order,
+unsupported roles, invalid market codes, duplicate source IDs, and orphan
+assignments. Warnings cover possible duplicate canonical products and conflicting
+assertions. Unresolved findings cover brand/product resolution and verified facts
+without evidence. Existing Narangd `campaign_source` lineage stays readable while
+it is incrementally mapped to `source_evidence`.
+
+### Advertising Gold contracts
+
+`gold_artist_commercial_intelligence` has one row per
+`artist_id × campaign/commercial relationship × product × market`. Null product
+or market can represent unresolved dimensions; multiple values are never packed
+into strings. It includes organization/brand/product/category dimensions,
+relationship and campaign dates, creative/platform/tag/source counts, evidence
+flags, conflict/unresolved flags, and first/last observation times.
+
+Supporting contracts are `gold_product_tag_profile` at one product × tag and
+`gold_campaign_creative_summary` at one campaign × platform. These marts are
+designs only and are not created in this task.
+
+Conceptual examples, not inserted facts: RESCENE → Domino Pizza →
+product/category → MODEL → KR; Woni → Biodance → skincare/face mask →
+AMBASSADOR → KR. An individual relationship does not imply a group relationship,
+or the reverse.
+
+```text
+advertiser_organization 1--* brand 1--* product
+                                  |        |--* product_category_assignment *--1 product_category
+                                  |        `--* product_tag_assignment *--1 product_tag
+                                  `--* campaign_brand *-- advertising_campaign
+                                                               |--* campaign_artist *--1 artist
+                                                               |--* campaign_product *--1 product
+                                                               |--* campaign_market *--1 market
+                                                               |--* advertisement_creative
+                                                               |--* campaign_market_metric
+                                                               `--* campaign_source (legacy)
+source_evidence 1--* canonical_field_evidence *--1 canonical entity/field
+source_evidence 1--* advertisement_creative
+source_evidence 1--* creative_tag_assignment *--1 creative_tag
+```
+
+Canonical relationship tables (`campaign_brand`, `campaign_artist`,
+`campaign_product`, and `campaign_market`) are the business truth model.
+`source_evidence` and `canonical_field_evidence` explain the assertions supporting
+those relationships and must not substitute for them.
+
+## Advertising discovery staging
+
+KR-only discovery evidence is captured immutably under
+`bronze/advertising_discovery/`, separate from verified advertising Bronze.
+Provisional rows are deduplicated by discovery source and normalized source URL
+in `staging.advertising_campaign_candidate`. They remain outside canonical
+Silver and cannot create advertiser, product, campaign, or artist entities.
+Nullable `discovered_for_artist_id` records which canonical watchlist artist
+caused discovery; it is not evidence of commercial participation and never
+creates a `campaign_artist` row.
+
+The candidate key identifies one discovery evidence URL, not one canonical
+campaign. Different article URLs about the same apparent commercial relationship
+remain separate candidates. A future verification and entity-resolution step may
+link them to one canonical campaign; discovery persistence does not perform that
+merge.
+
+Candidate evidence status supports only `DISCOVERED`, `OFFICIAL_SOURCE_FOUND`,
+`VERIFIED`, and `REJECTED`, with forward transitions through official evidence
+or rejection. The current implementation creates discovery candidates and
+validates lifecycle transitions; it does not search for official sources or
+verify candidates automatically.
+
+Official evidence is represented separately from the candidate by a deterministic
+`official_evidence_id`, `candidate_id`, normalized official URL and domain,
+controlled source type, discovery time, status, and reason. Official domains must
+be explicitly allowlisted; news/search, blog, and repost URLs do not qualify.
+Evidence records are currently validated in memory only and are not persisted.
+
+Artist-first discovery configuration lives outside the artist master and joins
+to canonical `artist` rows by `artist_id`. Canonical name and `GROUP`/`PERSON`
+type come from `artist`; the configuration contains only discovery enablement,
+priority, and Korean/English query aliases. Query templates must include an
+artist placeholder, are KR-only, and require an artist mention near an explicit
+commercial-intent signal before a candidate is retained. RESCENE is the only
+initially configured artist.
+
+The Google News candidate path is legacy/provisional Advertising discovery.
+Persisted candidates remain staging data and never become canonical facts
+automatically. A future News domain should model one article per publisher URL
+with artist linkage, publisher, published/observed timestamps, language, body
+reference, topics/tags, entities, and optional later sentiment. Candidate data
+can then be migrated or referenced without deletion. Proposed News marts are
+`gold_artist_news_hourly` and `gold_artist_news_daily`.
+
+Migration is additive: existing Advertising tables remain; `product_tag` and
+`product_tag_assignment` gain nullable columns; new creative, evidence, and
+field-evidence tables are defined; and `campaign_source` remains the legacy
+lineage contract. Discovery tables remain readable but are deprecated as an
+Advertising source. This milestone performs no live Iceberg migration.
+
 ## Relationships
 
 ```text
@@ -200,7 +425,7 @@ event-to-video foreign key is required for the current design.
 | Layer | Owns | Responsibility |
 | --- | --- | --- |
 | Bronze | Raw YouTube API responses and raw curated event inputs | Append source payloads with ingestion timestamp, source/endpoint metadata, request context, and a reproducible object identity. Bronze is not the canonical relational model. |
-| Silver | `artist`, `artist_external_identifier`, `artist_relationship`, `artist_event`, `event_artist`, `youtube_channel`, `youtube_video`, `video_metrics_snapshot` | Parse, normalize, deduplicate, enforce the keys above, and retain lineage back to Bronze records. Silver Iceberg tables are the canonical data model. |
+| Silver | Artist, event, YouTube, and advertising entity and relationship tables defined above | Parse, normalize, deduplicate, enforce the keys above, and retain lineage back to Bronze records. Silver Iceberg tables are the canonical data model. |
 | Gold | Minimal analytics-ready views/tables derived from Silver, including hourly and rolling 24-hour video growth with artist, channel, and event context | Calculate count deltas from actual UTC observation times and serve DuckDB analysis incrementally. Keep reusable calculations here; do not copy raw payloads or create duplicate master data. |
 
 Gold does not own new identities. It uses Silver primary and foreign keys so an

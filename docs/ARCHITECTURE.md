@@ -1,51 +1,53 @@
-# Local MVP Architecture
+# Contents Lakehouse Architecture
 
 ## Scope and principles
 
-The Local MVP supports one workload: collecting RESCENE-related YouTube data
-every hour and making it available for local analysis. Collection starts from
-`@RESCENE_official` and `@helloiamwoninicetomeetyou`. Both are relevant to the
-analysis; only the first is assumed to be an official RESCENE channel. The
-design favors reproducible batch runs and low idle memory use over distributed
-or continuously running infrastructure.
+The lakehouse supports implemented YouTube, MediaWiki/artist-metadata, and
+Advertising workloads through shared Bronze, Silver, Iceberg, and Gold
+boundaries. RESCENE remains the initial analysis target. Domain schemas and
+relationships are defined in [DATA_MODEL.md](DATA_MODEL.md), while milestone
+status is maintained in [ROADMAP.md](ROADMAP.md).
 
-Kafka and Airflow are not part of the MVP runtime. GCP is a future deployment
-target, not a dependency of the local pipeline.
+The local runtime uses reproducible finite batch jobs and favors low idle
+memory use over distributed or continuously running infrastructure. The hourly
+YouTube pipeline remains the reference implementation: it starts from
+`@RESCENE_official` and `@helloiamwoninicetomeetyou`, and only the first is
+assumed to be an official RESCENE channel.
+
+Kafka and Airflow are not part of the local runtime. GCP is not a dependency of
+local processing; GCS-capable Bronze collection is an additive deployment path.
 
 ## Data flow
 
 ```text
-                          hourly trigger
-                                │
-                                ▼
-YouTube Data API ──> one-shot collector ──> Bronze objects in MinIO
-                                                   │
-                                                   ▼
-                                      on-demand Spark transform
-                                                   │
-                                      ┌────────────┴────────────┐
-                                      ▼                         ▼
-                               Silver Iceberg             Gold Iceberg
-                               normalized data         analytics-ready data
-                                      │                         │
-                                      └────────────┬────────────┘
-                                                   ▼
-                                                DuckDB
-                                             local analysis
+YouTube API ───────────┐
+MediaWiki API ─────────┼─> one-shot collectors ─> source-specific Bronze
+Advertising sources ──┘                              │
+                                                    ▼
+                                           finite batch transforms
+                                                    │
+                                       ┌────────────┴────────────┐
+                                       ▼                         ▼
+                                Silver Iceberg             Gold Iceberg
+                                canonical data          analytical data
+                                       │                         │
+                                       └────────────┬────────────┘
+                                                    ▼
+                                                 DuckDB
+                                              local analysis
 ```
 
-1. A lightweight host scheduler invokes the collector once per hour. Manual
-   invocation remains possible during development.
-2. The collector calls the YouTube API and appends the raw response plus source
-   and ingestion metadata to Bronze in MinIO.
-3. Spark runs as a finite batch job after collection or on demand. It reads new
-   Bronze objects, incrementally updates Silver Iceberg tables, and derives the
-   required Gold tables.
+1. A lightweight host scheduler invokes each enabled domain collector at its
+   configured cadence. Manual invocation remains possible during development.
+2. Collectors append raw responses plus source and ingestion metadata to their
+   source-specific Bronze namespaces in MinIO or the configured object store.
+3. Finite batch transforms read new Bronze objects, incrementally update Silver
+   Iceberg tables, and derive implemented Gold outputs.
 4. DuckDB reads Silver or Gold for local exploration. Normal analysis should
    prefer Gold.
 
 A failed run is retried as a batch. No message broker or streaming path is
-needed for an hourly, single-artist workload.
+needed for the current bounded workloads.
 
 ## Component responsibilities
 
@@ -53,8 +55,8 @@ needed for an hourly, single-artist workload.
 | --- | --- | --- |
 | Docker Compose | Define reproducible local services, networks, volumes, and configuration boundaries | Starts only the services needed for a run or analysis session |
 | MinIO | Durable object storage for immutable Bronze payloads and the files underlying local Iceberg tables | Persistent service with data on a Docker volume |
-| Collector | Fetch channel, video, and metric data for the configured RESCENE-related seed channels and write Bronze records | One-shot process invoked hourly; exits after success or failure |
-| Apache Spark | Parse, normalize, deduplicate, preserve lineage, and incrementally build Silver and Gold Iceberg tables | On-demand batch process; no idle Spark cluster |
+| Collectors | Fetch source-native YouTube, MediaWiki, and Advertising payloads and write source-specific Bronze records | One-shot processes invoked at the configured cadence; exit after success or failure |
+| Batch transforms | Parse, normalize, deduplicate, preserve lineage, and incrementally build implemented Silver and Gold Iceberg tables | Finite jobs; no idle compute cluster |
 | Apache Iceberg | Provide transactional table metadata and table evolution for canonical Silver and derived Gold data | Table format, not a continuously running compute engine |
 | DuckDB | Query the local lakehouse for validation and analysis, especially Gold hourly and rolling 24-hour growth | Started only for a query or interactive session |
 
@@ -83,24 +85,27 @@ same idempotent batch entry point.
 
 ### Bronze — raw source ownership
 
-Bronze owns append-only YouTube API responses and raw curated event inputs in
-MinIO. Each object includes ingestion time, source/endpoint metadata, request
-context, and a reproducible identity. Bronze preserves source fidelity and does
-not enforce the relational model.
+Bronze owns append-only source responses and raw curated inputs in the
+configured object store. Each object includes ingestion time, source/endpoint
+metadata, request context, and a reproducible identity. Source-specific
+namespaces keep discovery evidence, verified Advertising evidence, MediaWiki,
+and YouTube payloads distinct. Bronze preserves source fidelity and does not
+enforce the relational model.
 
 ### Silver — canonical data ownership
 
-Silver owns the normalized Iceberg tables defined in `DATA_MODEL.md`:
-`artist`, `youtube_channel`, `youtube_video`, `video_metrics_snapshot`, and
-`artist_event`. Spark deduplicates records, enforces stable keys, normalizes all
-timestamps to UTC, and retains lineage to Bronze.
+Silver owns the normalized Iceberg tables defined in
+[DATA_MODEL.md](DATA_MODEL.md). Domain transforms deduplicate records, enforce
+stable keys, normalize timestamps according to the documented semantics, and
+retain lineage to Bronze or official source evidence.
 
 ### Gold — analytics ownership
 
 Gold owns only reusable analytics-ready Iceberg tables or views derived from
-Silver. For the MVP this includes hourly and rolling 24-hour video growth with
-artist, channel, and event context. Gold does not copy raw payloads or create
-new entity identities.
+Silver. Implemented outputs include hourly and rolling 24-hour video growth and
+the Advertising commercial-intelligence projection. Gold does not copy raw
+payloads or create new entity identities. The planned cross-domain analytical
+milestone is not represented as completed here.
 
 ## Quarantine and failure handling
 
@@ -219,9 +224,42 @@ means reprocessing succeeded. Failure records are retained after resolution.
 
 ## Extension points
 
-### Airflow after the end-to-end pipeline works
+### Advertising domain boundary
 
-Airflow can later replace the host scheduler and manual sequencing with retries,
+Advertising is a commercial-facts domain assembled from complementary sources;
+it is not a database of media coverage. Each source owns an immutable Bronze
+namespace and retains its native payload contract:
+
+```text
+bronze/advertising/kobaco/             (supplementary/reference; rights-limited)
+bronze/advertising/official_brand/     (source-specific official pages)
+bronze/advertising/official_product/   (source-specific official pages)
+bronze/advertising/meta/               (future; feasibility not confirmed)
+              │
+              ▼
+source_evidence + unresolved source-native records
+              │ deterministic identifiers / explicit aliases / review
+              ▼
+Advertising Silver entities and relationships
+              │
+              ▼
+commercial-intelligence Gold marts
+```
+
+Bronze preserves `source`, `source_record_id`, `collected_at`, sanitized request
+context, raw payload, and content hash. Source payloads do not share one forced
+raw schema. Silver owns commercial entities, creatives, relationships, and
+reusable evidence references; Gold owns analytical grains.
+
+Google News RSS is a discovery source and remains outside canonical Advertising
+facts. Its immutable discovery responses and staging candidates may lead to
+official-source review, but only verified official evidence can establish a
+canonical commercial relationship. A separate News domain and News NLP are not
+implemented.
+
+### Airflow as an optional orchestrator
+
+Airflow may later replace the host scheduler and manual sequencing with retries,
 dependency management, backfills, and monitoring. The collector and Spark jobs
 remain finite, idempotent tasks, so adding Airflow should not change storage
 boundaries or table contracts. Airflow is deliberately absent from the MVP
@@ -229,18 +267,20 @@ Compose runtime. When introduced, Airflow may own task state, retry execution,
 and operational logs; lakehouse failure records and quarantined payloads remain
 the durable data-quality history.
 
-### Future GCP migration
+### Cloud processing expansion
 
-The migration should preserve the Bronze/Silver/Gold contracts and Iceberg
-table model. MinIO object paths can map to cloud object storage, and local Spark
-execution can map to managed or serverless Spark. Scheduling and analytics can
-then move to suitable GCP services after local workloads and resource usage are
-measured. No GCP service is required or emulated in the Local MVP.
+GCS-capable collectors preserve the same Bronze contracts used locally. Further
+managed processing must preserve the Bronze/Silver/Gold contracts and Iceberg
+table model; local finite-batch execution can map to managed or serverless
+compute after workloads and resource usage are measured. No GCP service is
+required or emulated for local execution.
 
 ## Explicit exclusions
 
 - Kafka or any streaming broker
-- Airflow in the MVP runtime
+- Airflow in the local runtime
 - always-running Spark workers
-- GCP resources or cloud-specific data models
-- data sources other than the current RESCENE YouTube scope
+- managed GCP processing resources in the local runtime
+- cloud-specific canonical data models
+- a completed common Artist Activity Timeline contract
+- completed cross-domain analytical Gold marts
