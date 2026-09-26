@@ -3,6 +3,7 @@
 import base64
 import json
 import re
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
 
@@ -93,15 +94,113 @@ class AdvertisingBronzeStorage(BronzeStorage):
     def list_source_versions(
         self, config: SourceConfig
     ) -> list[tuple[str, dict[str, Any]]]:
-        return self.list_records(
+        return [item for item in self.list_records(
             prefix=self.source_prefix(config.source_type, config.source_identifier)
+        ) if item[0].endswith('/document.json')]
+
+    @staticmethod
+    def observation_time(value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            raise ValueError('Advertising observation time requires a timezone.')
+        return parsed.astimezone(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+
+    def write_observation(self, record: dict[str, Any], reference: str) -> tuple[str, bool]:
+        """Append a collection occurrence after its immutable content is durable."""
+        self.serialize_record(record)
+        observed_at = self.observation_time(record['retrieved_at'])
+        if not isinstance(record['run_id'], str) or not record['run_id']:
+            raise ValueError('Advertising observation requires run_id.')
+        identity = json.dumps([record['source_type'], record['source_identifier'],
+                               record['run_id'], observed_at], separators=(',', ':'))
+        observation_id = sha256(identity.encode()).hexdigest()
+        observation = {
+            name: record[name] for name in (
+                'source_type', 'source_identifier', 'source_name', 'source_url',
+                'run_id', 'published_at', 'collector_version', 'content_hash',
+                'raw_content_text_hash', 'raw_content_bytes_hash', 'request_metadata',
+            )
+        }
+        observation.update(record_type='advertising_observation',
+                           observation_id=observation_id, retrieved_at=observed_at,
+                           content_reference=reference)
+        if reference != self.object_name(record):
+            raise AdvertisingStorageConflict('Observation content reference mismatch.')
+        # Also protects callers that bypass collect_source from dangling references.
+        self._validated_content(reference)
+        key = self.source_prefix(record['source_type'], record['source_identifier']) + (
+            f'observations/{observation_id}.json'
         )
+        content = json.dumps(observation, ensure_ascii=False, sort_keys=True,
+                             separators=(',', ':')).encode('utf-8')
+        try:
+            self.client._put_object(self.bucket, key, content, headers={
+                'Content-Type': 'application/json', 'If-None-Match': '*',
+            })
+        except Exception as error:
+            if getattr(error, 'code', None) not in self.CONDITIONAL_CONFLICT_CODES:
+                raise BronzeStorageError(f'Unable to write observation {key}.') from error
+            if self.read_record(key) != observation:
+                raise AdvertisingStorageConflict(f'Conflicting observation: {key}.') from error
+            return key, False
+        return key, True
+
+    def list_source_observations(self, config: SourceConfig) -> list[tuple[str, dict[str, Any]]]:
+        """Include original legacy captures, without inventing missed observations."""
+        records = self.list_records(prefix=self.source_prefix(
+            config.source_type, config.source_identifier))
+        observations = [item for item in records
+                        if item[1].get('record_type') == 'advertising_observation']
+        represented = {(row['content_reference'], row['run_id'],
+                        self.observation_time(row['retrieved_at'])) for _, row in observations}
+        for key, row in records:
+            if not key.endswith('/document.json'):
+                continue
+            if row.get('observation_contract') == 'advertising-observation/1':
+                continue
+            observed_at = self.observation_time(row['retrieved_at'])
+            if (key, row['run_id'], observed_at) not in represented:
+                observations.append((key, dict(row, retrieved_at=observed_at,
+                                               content_reference=key)))
+        return sorted(observations, key=lambda item: (item[1]['retrieved_at'], item[0]))
+
+    def latest_source_record(self, config: SourceConfig) -> tuple[str, dict[str, Any]] | None:
+        observations = self.list_source_observations(config)
+        if not observations:
+            return None
+        key, observation = observations[-1]
+        previous_hash = observations[-2][1]['content_hash'] if len(observations) > 1 else None
+        return self.resolve_observation(key, observation, previous_hash)
+
+    def resolve_observation(
+        self, key: str, observation: dict[str, Any], previous_hash: str | None
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve content without changing the envelope consumed by existing Silver."""
+        reference = observation['content_reference']
+        record = self._validated_content(reference)
+        if record['content_hash'] != observation['content_hash']:
+            raise AdvertisingStorageConflict('Observation content identity mismatch.')
+        metadata = {name: value for name, value in observation.items()
+                    if name not in {'raw_content', 'raw_content_bytes_base64'}}
+        metadata.update(previous_content_hash=previous_hash,
+                        content_changed=None if previous_hash is None else
+                        previous_hash != observation['content_hash'])
+        return reference, dict(record, observation_reference=key, observation=metadata)
+
+    def _validated_content(self, reference: str) -> dict[str, Any]:
+        record = self.read_record(reference)
+        try:
+            self.serialize_record(record)
+            if self.object_name(record) != reference:
+                raise AdvertisingStorageConflict('Stored content identity mismatch.')
+        except (BronzeStorageError, KeyError, TypeError, ValueError) as error:
+            raise AdvertisingStorageConflict(f'Invalid stored content: {reference}.') from error
+        return record
 
     def latest_content_hash(self, config: SourceConfig) -> str | None:
-        versions = self.list_source_versions(config)
-        if not versions:
+        latest = self.latest_source_record(config)
+        if latest is None:
             return None
-        latest = max(versions, key=lambda item: item[1].get("retrieved_at", ""))
         value = latest[1].get("content_hash")
         return value if isinstance(value, str) else None
 

@@ -27,8 +27,10 @@ def main() -> int:
             run_id=run_id,
             observed_at=observed_at,
             record_sink=storage.write_record,
+            failure_sink=storage.write_failure,
         )
         videos = collect_seed_videos(get_api_key(), capture)
+        capture.raise_for_failures()
         logger.stage_succeeded(
             "bronze_collection",
             bronze_objects=len(capture.records),

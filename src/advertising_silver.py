@@ -297,6 +297,15 @@ def transform_advertising_bronze(
 
 
 def latest_narangd_bronze(storage: Any) -> tuple[str, dict[str, Any]]:
+    if hasattr(storage, 'latest_source_record'):
+        if __package__:
+            from .advertising_sources import NARANGD_SOURCE
+        else:
+            from advertising_sources import NARANGD_SOURCE
+        latest = storage.latest_source_record(NARANGD_SOURCE)
+        if latest is None:
+            raise AdvertisingTransformError('No persisted Narangd advertising Bronze object found.')
+        return latest
     objects = storage.list_records(prefix=ADVERTISING_PREFIX)
     valid = [
         item

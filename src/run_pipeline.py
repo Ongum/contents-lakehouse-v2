@@ -36,8 +36,10 @@ def main(run_id: str | None = None, observed_at: str | None = None) -> int:
         run_id=run_id,
         observed_at=observed_at,
         record_sink=storage.write_record,
+        failure_sink=storage.write_failure,
     )
     collect_seed_videos(api_key, capture)
+    capture.raise_for_failures()
     persisted = [
         item for item in storage.list_records() if item[1].get("run_id") == run_id
     ]

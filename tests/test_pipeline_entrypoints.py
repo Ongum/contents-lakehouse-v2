@@ -100,6 +100,8 @@ class PipelineEntrypointTest(unittest.TestCase):
             status=CollectionStatus.UNCHANGED,
             object_key="bronze/object",
             error_message=None,
+            content_created=False,
+            record={},
         )
         transformed = SimpleNamespace(
             invalid_records=[], organizations=[{}], campaigns=[{}], market_metrics=[]

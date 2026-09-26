@@ -14,6 +14,20 @@ from advertising_collection import CollectionStatus
 
 
 class CollectionEntrypointTest(unittest.TestCase):
+    def test_youtube_partial_run_is_nonzero_and_failure_is_sent_to_storage(self):
+        storage = Mock()
+
+        def collect(_key, capture):
+            capture.fail('videos', {'id': 'missing'}, 'unavailable_video', 'Video unavailable.')
+            capture.records.append({'successful': True})
+            return [{'video_id': 'good'}]
+
+        with patch.object(run_youtube_collection, 'bronze_storage_from_environment', return_value=storage), \
+             patch.object(run_youtube_collection, 'get_api_key', return_value='secret'), \
+             patch.object(run_youtube_collection, 'collect_seed_videos', side_effect=collect):
+            self.assertEqual(run_youtube_collection.main(), 1)
+        storage.write_failure.assert_called_once()
+
     def test_youtube_runs_collection_only(self) -> None:
         storage = Mock()
 

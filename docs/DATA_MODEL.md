@@ -470,6 +470,37 @@ group/person context through `artist_relationship`, and compare metric
 observations with participating events through `event_artist`. No direct
 event-to-video foreign key is required for the current design.
 
+## Advertising Bronze collection observations
+
+The existing content-version key and all canonical Silver IDs remain unchanged.
+Each successful document collection also writes a small immutable observation at
+`bronze/advertising/<source_type>/source_id=<digest>/observations/<id>.json`.
+
+- Observation identity is SHA-256 of the JSON tuple `(source_type,
+  source_identifier, run_id, normalized UTC retrieved_at)`. Replaying the same
+  occurrence must reuse its run/time and factual observation metadata; conflicting
+  content or metadata at that identity is quarantined rather than overwritten.
+- `content_reference` points to the existing content-addressed document.
+  Observation metadata retains source identity/URL/name, publication date,
+  collector version, request metadata, and observed text/byte hashes, but no
+  duplicate full payload. Source-specific normalization can still ignore a
+  volatile page counter; hashes identify that occurrence's fetched representation,
+  while the content reference retains the first full representation of that version.
+- Ordered observations reconstruct repeats and reversions. Previous content and
+  change status are derived from that order, not the content object's original
+  envelope. Equal timestamps use the object key as a deterministic tie-breaker;
+  they do not establish physical fetch order.
+- Latest readers select content by observation chronology and expose
+  `observation_reference` and a separate `observation` metadata object containing
+  its run, retrieval time, and derived previous-content/change values. The
+  returned content envelope retains its original fields, including retrieval
+  time, so existing Silver transformations do not retime content-keyed facts.
+- Legacy documents supply only their original known occurrence. Newly marked
+  `advertising-observation/1` documents require a completed observation write.
+
+This is an additive Bronze contract, not a canonical entity/grain migration.
+M05 remains blocked pending the remaining foundation corrections.
+
 ## Medallion ownership
 
 | Layer | Owns | Responsibility |

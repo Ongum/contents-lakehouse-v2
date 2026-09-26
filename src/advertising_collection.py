@@ -95,6 +95,8 @@ class CollectionResult:
     record: dict[str, Any] | None = None
     error_type: str | None = None
     error_message: str | None = None
+    observation_key: str | None = None
+    content_created: bool = False
 
 
 class SourceAdapter(Protocol):
@@ -225,6 +227,7 @@ def collect_source(
     observed_at = retrieved_at or utc_now()
     try:
         validate_source_config(config)
+        observed_at = storage.observation_time(observed_at)
         document = adapter.fetch(config)
         previous_hash = storage.latest_content_hash(config)
         record = build_bronze_record(
@@ -234,27 +237,27 @@ def collect_source(
             observed_at,
             previous_hash,
         )
+        record['observation_contract'] = 'advertising-observation/1'
         object_key, created = storage.write_version(record)
+        observation_key, _ = storage.write_observation(record, object_key)
+        history = storage.list_source_observations(config)
+        position = next(index for index, item in enumerate(history) if item[0] == observation_key)
+        previous_hash = history[position - 1][1]['content_hash'] if position else None
+        changed = None if previous_hash is None else previous_hash != document.content_hash
         attempts = getattr(adapter, "last_attempts", 1)
-        if created:
-            return CollectionResult(
-                status=CollectionStatus.SUCCESS,
-                retrieved_at=observed_at,
-                attempts=attempts,
-                object_key=object_key,
-                content_hash=document.content_hash,
-                content_changed=record["content_changed"],
-                record=record,
-            )
-        persisted = storage.read_record(object_key)
+        _, persisted = storage.resolve_observation(
+            observation_key, history[position][1], previous_hash
+        )
         return CollectionResult(
-            status=CollectionStatus.UNCHANGED,
+            status=CollectionStatus.SUCCESS if created or changed is True else CollectionStatus.UNCHANGED,
             retrieved_at=observed_at,
             attempts=attempts,
             object_key=object_key,
             content_hash=document.content_hash,
-            content_changed=False,
+            content_changed=changed,
             record=persisted,
+            observation_key=observation_key,
+            content_created=created,
         )
     except MalformedDocumentError as error:
         return CollectionResult(

@@ -53,11 +53,11 @@ def main() -> int:
         logger.stage_succeeded(
             "bronze_collection",
             collection_status=collected.status.value,
-            bronze_objects_created=int(collected.status == CollectionStatus.SUCCESS),
+            bronze_objects_created=int(collected.content_created),
         )
 
         logger.stage_started("silver_transformation")
-        envelope = storage.read_record(collected.object_key)
+        envelope = collected.record
         result = transform_advertising_bronze(collected.object_key, envelope)
         if result.invalid_records:
             raise RuntimeError(result.invalid_records[0]["error_message"])

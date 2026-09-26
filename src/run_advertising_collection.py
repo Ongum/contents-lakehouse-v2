@@ -42,7 +42,8 @@ def main() -> int:
         logger.stage_succeeded(
             "bronze_collection",
             collection_status=result.status.value,
-            bronze_objects_created=int(result.status == CollectionStatus.SUCCESS),
+            bronze_objects_created=int(result.content_created),
+            observation_reference=result.observation_key,
             object_name=result.object_key,
         )
         logger.pipeline_succeeded(collection_status=result.status.value)

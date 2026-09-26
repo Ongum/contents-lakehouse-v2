@@ -139,23 +139,27 @@ class AdvertisingBronzeTest(unittest.TestCase):
         )
 
     def test_same_content_becomes_unchanged(self):
-        first = collect_source(config(), StaticAdapter("same"), self.storage)
-        second = collect_source(config(), StaticAdapter("same"), self.storage)
+        first = collect_source(config(), StaticAdapter("same"), self.storage,
+                               retrieved_at="2026-09-25T00:00:00Z")
+        second = collect_source(config(), StaticAdapter("same"), self.storage,
+                                retrieved_at="2026-09-25T01:00:00Z")
 
         self.assertEqual(first.status, CollectionStatus.SUCCESS)
         self.assertEqual(second.status, CollectionStatus.UNCHANGED)
         self.assertEqual(first.object_key, second.object_key)
-        self.assertEqual(self.client.put_count, 1)
+        self.assertEqual(self.client.put_count, 3)
 
     def test_changed_content_creates_new_version(self):
-        first = collect_source(config(), StaticAdapter("first"), self.storage)
-        second = collect_source(config(), StaticAdapter("second"), self.storage)
+        first = collect_source(config(), StaticAdapter("first"), self.storage,
+                               retrieved_at="2026-09-25T00:00:00Z")
+        second = collect_source(config(), StaticAdapter("second"), self.storage,
+                                retrieved_at="2026-09-25T01:00:00Z")
 
         self.assertEqual(second.status, CollectionStatus.SUCCESS)
         self.assertNotEqual(first.object_key, second.object_key)
         self.assertTrue(second.content_changed)
         self.assertEqual(second.record["previous_content_hash"], first.content_hash)
-        self.assertEqual(self.client.put_count, 2)
+        self.assertEqual(self.client.put_count, 4)
 
     def test_object_key_is_deterministic_and_does_not_embed_url(self):
         result = collect_source(config(), StaticAdapter("same"), self.storage)
@@ -276,7 +280,7 @@ class AdvertisingBronzeTest(unittest.TestCase):
 
     def test_existing_conflicting_content_is_never_overwritten(self):
         document = StaticAdapter("expected").fetch(config())
-        record = build_bronze_record(config(), document, "run-1", "2026-01-01Z", None)
+        record = build_bronze_record(config(), document, "run-1", "2026-01-01T00:00:00Z", None)
         object_name = self.storage.object_name(record)
         conflicting = dict(record, raw_content="different")
         self.client.objects[("lakehouse", object_name)] = json.dumps(

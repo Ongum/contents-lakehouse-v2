@@ -138,9 +138,21 @@ written successfully is not deleted; retries use the same source identity and
 canonical keys to avoid duplicates.
 
 For multi-channel collection, failure of either seed-channel request fails the
-run. A payload already received successfully for the other channel remains a
-valid Bronze object. The failed request does not produce an empty, synthetic,
-or otherwise fake Bronze payload.
+run after independent collection has finished. YouTube isolates invalid or
+unavailable video items, failed detail batches, and failed channels. A failed
+uploads page stops pagination for that playlist but already discovered IDs are
+still collected. Successful raw responses remain valid Bronze objects. Failed
+requests never produce synthetic Bronze payloads or invented metrics.
+
+YouTube collection diagnostics are immutable JSON objects under
+`failures/youtube/collection/`, separate from raw Bronze. They retain run and
+observation context, resource/request parameters without credentials, item/video
+identity where available, failure type, recovery status, and an exact Bronze
+reference when a response was persisted. Partial runs return nonzero after
+collection; the end-to-end entrypoint does not advance downstream processing.
+If raw or diagnostic persistence fails, collection fails immediately. Replaying
+stored responses preserves their original observation time; a new API request
+is a new observation and cannot reconstruct a missed historical metric.
 
 **Record-level failures** affect individual records while the surrounding task
 can still complete safely. Examples include a malformed payload, invalid
@@ -250,6 +262,25 @@ Bronze preserves `source`, `source_record_id`, `collected_at`, sanitized request
 context, raw payload, and content hash. Source payloads do not share one forced
 raw schema. Silver owns commercial entities, creatives, relationships, and
 reusable evidence references; Gold owns analytical grains.
+
+Advertising document capture now separates immutable content versions from
+immutable collection observations. Existing `content_hash=.../document.json`
+objects stay unchanged. Small `observations/<observation_id>.json` objects in
+the same source directory reference those content objects, so A → B → A stores
+two full payloads and three observations. Latest state is selected by normalized
+UTC observation time, with object key as a deterministic tie-breaker for equal
+timestamps, rather than by the first capture time of each content version.
+
+Content is written before its observation using create-only operations. A
+failed observation write fails the collection. For newly created content, its
+envelope contains the original run/time context needed to retry
+`write_observation`; reused content requires the caller to retain the failed
+occurrence's context. Latest readers keep observation metadata separate from
+the original content envelope to preserve existing Silver timestamp semantics.
+New-contract content without an observation is not a completed latest state.
+Legacy content envelopes remain readable as their single known observation;
+missing historical repeats are never invented. See
+[ADR-004](adr/ADR-004-foundation-observation-history.md) for identity and recovery.
 
 Google News RSS is a discovery source and remains outside canonical Advertising
 facts. Its immutable discovery responses and staging candidates may lead to

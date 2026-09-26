@@ -187,6 +187,22 @@ class BronzeStorage:
             raise BronzeStorageError(f"Invalid Bronze object {object_name}.")
         return record
 
+    def write_failure(self, failure: dict[str, Any]) -> str:
+        """Persist collection diagnostics outside raw-source Bronze namespaces."""
+        content = json.dumps(failure, ensure_ascii=False, sort_keys=True,
+                             separators=(',', ':')).encode('utf-8')
+        key = f'failures/youtube/collection/{sha256(content).hexdigest()}.json'
+        try:
+            self.client._put_object(self.bucket, key, content, headers={
+                'Content-Type': 'application/json', 'If-None-Match': '*',
+            })
+        except Exception as error:
+            if getattr(error, 'code', None) not in {'PreconditionFailed', 'ConditionalRequestConflict'}:
+                raise BronzeStorageError(f'Unable to preserve YouTube failure {key}.') from error
+            if self._read_bytes(key) != content:
+                raise BronzeStorageError(f'Conflicting YouTube failure {key}.') from error
+        return key
+
     def list_records(
         self, prefix: str = "bronze/youtube/"
     ) -> list[tuple[str, dict[str, Any]]]:
